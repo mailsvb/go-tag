@@ -22,23 +22,7 @@ func (a *App) renameFiles() {
 	if a.busy || len(sel) == 0 {
 		return
 	}
-	var dirty []*library.File
-	for _, f := range sel {
-		if f.Dirty() {
-			dirty = append(dirty, f)
-		}
-	}
-	if len(dirty) == 0 {
-		a.showRenameDialog()
-		return
-	}
-	dialog.ShowConfirm("Unsaved changes",
-		fmt.Sprintf("%s of the selection have unsaved changes.\nFile names are built from the saved tags. Save them first?", filesCount(len(dirty))),
-		func(ok bool) {
-			if ok {
-				a.save(dirty, a.showRenameDialog)
-			}
-		}, a.window)
+	a.saveSelectionFirst("File names are built from the saved tags.", a.showRenameDialog)
 }
 
 // renameDialog holds the widgets of the rename dialog.

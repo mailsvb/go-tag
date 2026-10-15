@@ -37,7 +37,7 @@ type App struct {
 
 	openFilesBtn, openFolderBtn, clearBtn *widget.Button
 	selectAllBtn, selectNoneBtn           *widget.Button
-	numberBtn, renameBtn                  *widget.Button
+	numberBtn, renameBtn, volumeBtn       *widget.Button
 	revertBtn, saveBtn                    *widget.Button
 
 	content fyne.CanvasObject
@@ -65,6 +65,7 @@ func New(w fyne.Window, version string, picker Picker) *App {
 	a.selectNoneBtn = widget.NewButtonWithIcon("Select none", theme.CheckButtonIcon(), a.selectNone)
 	a.numberBtn = widget.NewButtonWithIcon("Number tracks", theme.ListIcon(), a.numberTracks)
 	a.renameBtn = widget.NewButtonWithIcon("Rename files…", theme.DocumentCreateIcon(), a.renameFiles)
+	a.volumeBtn = widget.NewButtonWithIcon("Volume…", theme.VolumeUpIcon(), a.adjustVolume)
 	a.revertBtn = widget.NewButtonWithIcon("Revert all", theme.ContentUndoIcon(), a.revertAll)
 	a.saveBtn = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), a.Save)
 	a.saveBtn.Importance = widget.HighImportance
@@ -74,7 +75,7 @@ func New(w fyne.Window, version string, picker Picker) *App {
 		widget.NewSeparator(),
 		a.selectAllBtn, a.selectNoneBtn,
 		widget.NewSeparator(),
-		a.numberBtn, a.renameBtn,
+		a.numberBtn, a.renameBtn, a.volumeBtn,
 		layout.NewSpacer(),
 		a.revertBtn, a.saveBtn,
 	)
@@ -203,20 +204,9 @@ func (a *App) save(pending []*library.File, onDone func()) {
 		jobs[i] = job{f, f.Current}
 	}
 
-	a.setBusy(true)
-	progress := widget.NewProgressBar()
-	progress.Max = float64(len(jobs))
-	dlg := dialog.NewCustomWithoutButtons("Saving "+filesCount(len(jobs)), progress, a.window)
-	dlg.Show()
-
-	a.run(func() {
-		errs := make([]error, len(jobs))
-		for i, j := range jobs {
-			errs[i] = tags.Write(j.file.Path, j.tags)
-			done := float64(i + 1)
-			fyne.Do(func() { progress.SetValue(done) })
-		}
-		fyne.Do(func() {
+	a.runWithProgress("Saving "+filesCount(len(jobs)), len(jobs),
+		func(i int) error { return tags.Write(jobs[i].file.Path, jobs[i].tags) },
+		func(errs []error) {
 			var failed []string
 			for i, j := range jobs {
 				if errs[i] != nil {
@@ -225,9 +215,7 @@ func (a *App) save(pending []*library.File, onDone func()) {
 				}
 				a.lib.MarkSaved(j.file, j.tags)
 			}
-			dlg.Hide()
 			a.lib.Resort()
-			a.setBusy(false)
 			a.refresh()
 			if len(failed) > 0 {
 				showErrorList("Some files could not be saved", failed, a.window)
@@ -235,7 +223,53 @@ func (a *App) save(pending []*library.File, onDone func()) {
 				onDone()
 			}
 		})
+}
+
+// runWithProgress runs work(0) … work(n-1) in the background while a progress
+// dialog is shown, then calls done with the errors on the UI goroutine. The
+// app is busy in the meantime.
+func (a *App) runWithProgress(title string, n int, work func(i int) error, done func(errs []error)) {
+	a.setBusy(true)
+	progress := widget.NewProgressBar()
+	progress.Max = float64(n)
+	dlg := dialog.NewCustomWithoutButtons(title, progress, a.window)
+	dlg.Show()
+
+	a.run(func() {
+		errs := make([]error, n)
+		for i := range n {
+			errs[i] = work(i)
+			v := float64(i + 1)
+			fyne.Do(func() { progress.SetValue(v) })
+		}
+		fyne.Do(func() {
+			dlg.Hide()
+			a.setBusy(false)
+			done(errs)
+		})
 	})
+}
+
+// saveSelectionFirst runs then once the selected files have no unsaved
+// changes, asking to save them first if they have; reason explains why.
+func (a *App) saveSelectionFirst(reason string, then func()) {
+	var dirty []*library.File
+	for _, f := range a.lib.Selected() {
+		if f.Dirty() {
+			dirty = append(dirty, f)
+		}
+	}
+	if len(dirty) == 0 {
+		then()
+		return
+	}
+	dialog.ShowConfirm("Unsaved changes",
+		fmt.Sprintf("%s of the selection have unsaved changes.\n%s Save them first?", filesCount(len(dirty)), reason),
+		func(ok bool) {
+			if ok {
+				a.save(dirty, then)
+			}
+		}, a.window)
 }
 
 func (a *App) openFiles() {
@@ -355,6 +389,7 @@ func (a *App) refresh() {
 	setEnabled(a.selectNoneBtn, sel > 0)
 	setEnabled(a.numberBtn, !a.busy && sel > 0 && a.editor.row(library.Track).toggle.Checked)
 	setEnabled(a.renameBtn, !a.busy && sel > 0)
+	setEnabled(a.volumeBtn, !a.busy && sel > 0)
 }
 
 func filesCount(n int) string {

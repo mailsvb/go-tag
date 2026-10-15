@@ -300,6 +300,13 @@ func (l *Library) Pending() []*File {
 	return out
 }
 
+// CommitGain records that the volume information g was written to disk for f.
+// The gain is not an edit, so it is set in both the saved and the current tags.
+func (l *Library) CommitGain(f *File, g tags.Gain) {
+	f.Original.Gain = g
+	f.Current.Gain = g
+}
+
 // MarkSaved records that saved was written to disk for f.
 func (l *Library) MarkSaved(f *File, saved tags.Tags) {
 	f.Original = saved

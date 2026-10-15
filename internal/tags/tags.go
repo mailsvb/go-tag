@@ -1,8 +1,10 @@
 // Package tags reads and writes the MP3 tag fields go-tag edits.
 //
-// Only Title, Artist, Album Artist, Album, Genre, Year, Track and the front
-// cover are kept. Writing replaces every existing tag (all other ID3v2 frames,
-// ID3v1, Lyrics3 and APEv2) with a fresh ID3v2.3 tag holding just these fields.
+// Only Title, Artist, Album Artist, Album, Genre, Year, Track, the front cover
+// and the volume information (ReplayGain values and the gain applied by
+// go-tag) are kept. Writing replaces every existing tag (all other ID3v2
+// frames, ID3v1, Lyrics3 and APEv2) with a fresh ID3v2.3 tag holding just
+// these fields.
 package tags
 
 import (
@@ -12,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bogem/id3v2/v2"
@@ -41,13 +44,34 @@ type Tags struct {
 	Year        string
 	Track       string
 	Cover       *Picture
+	Gain        Gain
 }
+
+// Gain is the volume information of a file. It is not edited directly but
+// written by the volume adjustment.
+type Gain struct {
+	// Steps is the total global_gain change (1.5 dB each) go-tag applied to
+	// the audio frames; applying -Steps restores the original level.
+	Steps int
+	// ReplayGain values as stored in the tag, e.g. "-0.42 dB" and "0.912345";
+	// empty if absent.
+	TrackGain, TrackPeak, AlbumGain, AlbumPeak string
+}
+
+// TXXX descriptions of the Gain fields.
+const (
+	txxxSteps     = "GO-TAG_GAIN_STEPS"
+	txxxTrackGain = "REPLAYGAIN_TRACK_GAIN"
+	txxxTrackPeak = "REPLAYGAIN_TRACK_PEAK"
+	txxxAlbumGain = "REPLAYGAIN_ALBUM_GAIN"
+	txxxAlbumPeak = "REPLAYGAIN_ALBUM_PEAK"
+)
 
 // Equal reports whether t and o hold the same values.
 func (t Tags) Equal(o Tags) bool {
 	return t.Title == o.Title && t.Artist == o.Artist && t.AlbumArtist == o.AlbumArtist &&
 		t.Album == o.Album && t.Genre == o.Genre && t.Year == o.Year && t.Track == o.Track &&
-		t.Cover.Equal(o.Cover)
+		t.Cover.Equal(o.Cover) && t.Gain == o.Gain
 }
 
 // Read returns the tag fields of the MP3 file at path. Fields missing from the
@@ -103,6 +127,26 @@ func fromID3v2(tag *id3v2.Tag) Tags {
 		}
 	}
 	t.Cover = cover
+
+	for _, fr := range tag.GetFrames("TXXX") {
+		uf, ok := fr.(id3v2.UserDefinedTextFrame)
+		if !ok {
+			continue
+		}
+		value := cleanText(uf.Value)
+		switch strings.ToUpper(cleanText(uf.Description)) {
+		case txxxSteps:
+			t.Gain.Steps, _ = strconv.Atoi(value)
+		case txxxTrackGain:
+			t.Gain.TrackGain = value
+		case txxxTrackPeak:
+			t.Gain.TrackPeak = value
+		case txxxAlbumGain:
+			t.Gain.AlbumGain = value
+		case txxxAlbumPeak:
+			t.Gain.AlbumPeak = value
+		}
+	}
 	return t
 }
 
@@ -153,7 +197,37 @@ func isDigits(s string) bool {
 // Write replaces all tags of the MP3 file at path with t. The audio data is
 // kept byte for byte; the file is rewritten via a temporary file and renamed
 // into place, so the original stays untouched if anything fails.
-func Write(path string, t Tags) (err error) {
+func Write(path string, t Tags) error { return rewrite(path, t, nil) }
+
+// WriteAudio is Write, but the audio data is passed through transform first.
+// transform modifies the audio in place and must keep its length.
+func WriteAudio(path string, t Tags, transform func(audio []byte) error) error {
+	return rewrite(path, t, transform)
+}
+
+// ReadAudio returns the audio data of the MP3 file at path, without tags.
+func ReadAudio(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	start, end, err := audioRange(f, fi.Size())
+	if err != nil {
+		return nil, err
+	}
+	audio := make([]byte, end-start)
+	if _, err := f.ReadAt(audio, start); err != nil {
+		return nil, err
+	}
+	return audio, nil
+}
+
+func rewrite(path string, t Tags, transform func(audio []byte) error) (err error) {
 	var tagBuf bytes.Buffer
 	if _, err := build(t).WriteTo(&tagBuf); err != nil {
 		return fmt.Errorf("encode tag: %w", err)
@@ -172,6 +246,20 @@ func Write(path string, t Tags) (err error) {
 	if err != nil {
 		return err
 	}
+	var audio io.Reader = io.NewSectionReader(src, start, end-start)
+	if transform != nil {
+		b := make([]byte, end-start)
+		if _, err := src.ReadAt(b, start); err != nil {
+			return err
+		}
+		if err := transform(b); err != nil {
+			return err
+		}
+		if int64(len(b)) != end-start {
+			return errors.New("audio length changed")
+		}
+		audio = bytes.NewReader(b)
+	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".go-tag-*.tmp")
 	if err != nil {
@@ -186,7 +274,7 @@ func Write(path string, t Tags) (err error) {
 	if _, err = tmp.Write(tagBuf.Bytes()); err != nil {
 		return err
 	}
-	if _, err = io.Copy(tmp, io.NewSectionReader(src, start, end-start)); err != nil {
+	if _, err = io.Copy(tmp, audio); err != nil {
 		return err
 	}
 	if err = tmp.Sync(); err != nil {
@@ -217,6 +305,20 @@ func build(t Tags) *id3v2.Tag {
 	add("TCON", t.Genre)
 	add("TYER", t.Year)
 	add("TRCK", t.Track)
+	addTXXX := func(desc, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			tag.AddUserDefinedTextFrame(id3v2.UserDefinedTextFrame{
+				Encoding: id3v2.EncodingISO, Description: desc, Value: value,
+			})
+		}
+	}
+	if t.Gain.Steps != 0 {
+		addTXXX(txxxSteps, strconv.Itoa(t.Gain.Steps))
+	}
+	addTXXX(txxxTrackGain, t.Gain.TrackGain)
+	addTXXX(txxxTrackPeak, t.Gain.TrackPeak)
+	addTXXX(txxxAlbumGain, t.Gain.AlbumGain)
+	addTXXX(txxxAlbumPeak, t.Gain.AlbumPeak)
 	if t.Cover != nil && len(t.Cover.Data) > 0 {
 		tag.AddAttachedPicture(id3v2.PictureFrame{
 			Encoding:    id3v2.EncodingISO,

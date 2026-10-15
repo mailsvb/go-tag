@@ -213,3 +213,92 @@ func TestSortNumberAndRename(t *testing.T) {
 		t.Errorf("first row file name = %q", got)
 	}
 }
+
+func TestVolume(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "gain", "testdata", "stereo44k.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for i := 1; i <= 2; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newTestApp(t, fakePicker{folder: dir})
+	test.Tap(a.openFolderBtn)
+	if !a.volumeBtn.Disabled() {
+		t.Error("Volume enabled without selection")
+	}
+	test.Tap(a.selectAllBtn)
+	if a.volumeBtn.Disabled() {
+		t.Error("Volume disabled with selection")
+	}
+	a.lib.Selected()[0].Current.Title = "Edited" // must survive and be saved first
+
+	analyze := func() *volumeDialog {
+		t.Helper()
+		var d *volumeDialog
+		a.analyzeVolume(a.lib.Selected(), func(items []volumeItem) { d = a.newVolumeDialog(items) })
+		if d == nil {
+			t.Fatal("analysis did not finish")
+		}
+		return d
+	}
+
+	// The fixture is a sine at about -20.4 LUFS with a peak of -20 dBFS:
+	// +2.4 dB to the target are 2 steps.
+	a.save(a.lib.Selected(), nil)
+	d := analyze()
+	d.mode.SetSelected(modeAlbum)
+	if !d.undo.Disabled() {
+		t.Error("Undo enabled before any change")
+	}
+	for _, it := range d.items {
+		if it.err != nil || it.change.Steps != 2 {
+			t.Fatalf("%s: change %+v, err %v", it.file.Name(), it.change, it.err)
+		}
+	}
+	d.applyChanges()
+	for _, f := range a.lib.Files {
+		g := f.Original.Gain
+		if g.Steps != 2 || g.TrackGain == "" || g.AlbumGain == "" || f.Dirty() {
+			t.Errorf("%s: gain %+v, dirty %v", f.Name(), g, f.Dirty())
+		}
+		onDisk, err := tags.Read(f.Path)
+		if err != nil || onDisk.Gain != g {
+			t.Errorf("%s: gain on disk %+v, %v, want %+v", f.Name(), onDisk.Gain, err, g)
+		}
+	}
+	if got, _ := tags.Read(a.lib.Files[0].Path); got.Title != "Edited" {
+		t.Errorf("title on disk = %q, want the saved edit", got.Title)
+	}
+
+	// Analyzing again proposes no further change; track mode drops the album values.
+	d = analyze()
+	d.mode.SetSelected(modeTrack)
+	if d.undo.Disabled() {
+		t.Error("Undo disabled after a change")
+	}
+	for _, it := range d.items {
+		if it.change.Steps != 0 {
+			t.Errorf("%s: second analysis proposes %d steps", it.file.Name(), it.change.Steps)
+		}
+	}
+	d.applyChanges()
+	if g := a.lib.Files[0].Original.Gain; g.Steps != 2 || g.AlbumGain != "" || g.TrackGain == "" {
+		t.Errorf("gain after track mode = %+v", g)
+	}
+
+	// Undo restores the original audio.
+	analyze().undoChanges()
+	for _, f := range a.lib.Files {
+		if f.Original.Gain != (tags.Gain{}) {
+			t.Errorf("%s: gain after undo = %+v", f.Name(), f.Original.Gain)
+		}
+		audio, err := tags.ReadAudio(f.Path)
+		if err != nil || !bytes.Equal(audio, src) {
+			t.Errorf("%s: audio after undo differs from the original (%v)", f.Name(), err)
+		}
+	}
+}

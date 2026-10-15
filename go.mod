@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	fyne.io/fyne/v2 v2.8.2
 	github.com/bogem/id3v2/v2 v2.1.4
+	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/ncruces/zenity v0.10.15
 	golang.org/x/image v0.44.0
 	golang.org/x/text v0.40.0

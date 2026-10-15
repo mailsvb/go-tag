@@ -220,3 +220,69 @@ func TestNormalizeGenre(t *testing.T) {
 		t.Errorf("len(Genres) = %d, want 192", len(Genres))
 	}
 }
+
+func TestGainRoundTrip(t *testing.T) {
+	audio := fakeAudio()
+	path := writeFile(t, id3v24Tag(t), audio)
+	want := Tags{Title: "T", Gain: Gain{Steps: -3, TrackGain: "-0.42 dB", TrackPeak: "0.912345", AlbumGain: "+0.10 dB", AlbumPeak: "0.990000"}}
+	if err := Write(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(want) {
+		t.Errorf("Read after Write = %+v, want %+v", got, want)
+	}
+
+	// Saving other fields keeps the gain information.
+	got.Title = "New"
+	if err := Write(path, got); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Gain != want.Gain {
+		t.Errorf("Gain after second Write = %+v, want %+v", again.Gain, want.Gain)
+	}
+}
+
+func TestWriteAudio(t *testing.T) {
+	audio := fakeAudio()
+	path := writeFile(t, id3v24Tag(t), audio, id3v1Tag("V1", "V1", 1, 1))
+	want := Tags{Title: "T", Gain: Gain{Steps: 2}}
+	err := WriteAudio(path, want, func(b []byte) error {
+		for i := range b {
+			b[i] ^= 0xFF
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadAudio(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range audio {
+		audio[i] ^= 0xFF
+	}
+	if !bytes.Equal(got, audio) {
+		t.Error("ReadAudio does not return the transformed audio")
+	}
+	if tg, err := Read(path); err != nil || !tg.Equal(want) {
+		t.Errorf("Read = %+v, %v, want %+v", tg, err, want)
+	}
+
+	// A failing transform leaves the file untouched.
+	before, _ := os.ReadFile(path)
+	if err := WriteAudio(path, Tags{}, func([]byte) error { return fmt.Errorf("boom") }); err == nil {
+		t.Error("WriteAudio with failing transform succeeded")
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Error("failed WriteAudio modified the file")
+	}
+}
