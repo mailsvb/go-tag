@@ -1,7 +1,22 @@
 # go-tag
 
-Cross-platform desktop tool written in Go with a [Fyne](https://fyne.io) UI.
+Cross-platform MP3 tag editor written in Go with a [Fyne](https://fyne.io) UI.
 Targets **Windows (amd64)** and **macOS on Apple Silicon (arm64)**.
+
+## Features
+
+- Load MP3 files with **Open files…** / **Open folder…** (folders are searched recursively) or by dragging files and folders onto the window.
+- The table shows the cover thumbnail, Title, Artist, Album and file name; ● marks files with unsaved changes.
+- Select rows like in a file manager: click, Ctrl/Cmd+click, Shift+click, Ctrl/Cmd+A or **Select all**.
+- Edit **Title, Artist, Album, Genre, Year, Track** and the **Cover** (choose an image, drop a JPEG/PNG onto the window, or remove it) for all selected files at once. Fields that differ between the selected files show ‹multiple values› and stay untouched unless you type into them.
+- Every field has a checkbox (ticked by default). Untick it to leave that field unchanged in every selected file.
+- **Album Artist** is set to the Artist automatically whenever the Artist is changed.
+- Click a column header (Track, Title, Artist, Album, File) to sort: 1st click descending ▼, 2nd ascending ▲, 3rd back to load order.
+- **Number tracks** sets the Track of the selected files to `01`, `02`, … in table order.
+- **Rename files…** renames the selected files from their saved tags using a pattern such as `{track} - {artist} - {title}` (placeholders: `{track} {title} {artist} {album} {genre} {year}`). A preview shows the new names; files whose name would collide or be empty are skipped. Unsaved edits of the selection are saved first.
+- Edits are kept in memory until **Save** (Ctrl/Cmd+S) writes all changed files at once; **Revert all** discards them.
+
+When a file is saved, its tag is rewritten as ID3v2.3 containing only the fields above. All other frames (comments, lyrics, extra pictures, …) as well as ID3v1, Lyrics3 and APEv2 tags are removed; the audio data is not touched.
 
 ## Prerequisites
 
@@ -34,8 +49,9 @@ This produces `go-tag.exe` on Windows or `go-tag.app` on macOS, using `Icon.png`
 | Path | Purpose |
 | --- | --- |
 | `main.go` | Application entry point, creates the window |
-| `internal/ui` | Fyne widgets and layout |
-| `internal/greeting` | UI-independent logic |
+| `internal/ui` | Fyne widgets: toolbar, file table, tag editor, native file dialogs |
+| `internal/library` | Loaded files, selection and pending edits (no UI) |
+| `internal/tags` | Reading and writing the MP3 tags |
 | `FyneApp.toml`, `Icon.png` | Fyne app metadata and icon used by `fyne package` |
 
 ## CI/CD

@@ -1,4 +1,4 @@
-// Command go-tag is a cross-platform desktop tool built with Fyne.
+// Command go-tag is a cross-platform MP3 tag editor built with Fyne.
 package main
 
 import (
@@ -17,7 +17,10 @@ func main() {
 	}
 
 	w := a.NewWindow("go-tag")
-	w.SetContent(ui.NewContent(version).Object())
-	w.Resize(fyne.NewSize(400, 160))
+	content := ui.New(w, version, ui.NativePicker{})
+	w.SetContent(content.Object())
+	w.SetOnDropped(content.HandleDrop)
+	w.SetCloseIntercept(content.ConfirmClose)
+	w.Resize(fyne.NewSize(1100, 700))
 	w.ShowAndRun()
 }
