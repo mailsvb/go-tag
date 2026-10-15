@@ -1,0 +1,8 @@
+Website = "https://github.com/mailsvb/go-tag"
+
+[Details]
+  Icon = "Icon.png"
+  Name = "go-tag"
+  ID = "de.bsgl.gotag"
+  Version = "0.9.0"
+  Build = 1

@@ -1,0 +1,17 @@
+# Build output
+/go-tag
+*.exe
+*.app/
+*.zip
+/dist/
+
+# Test / tooling
+*.test
+*.out
+coverage.*
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
