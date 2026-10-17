@@ -43,9 +43,11 @@ to the virtual **Gocorder** audio device, one MP3 file per track:
 
 Recording needs, once:
 
-1. **The Gocorder audio driver.** From a clone of this repository:
+1. **The Gocorder audio driver.** From a clone of this repository, with the
+   Xcode Command Line Tools (`xcode-select --install`):
    `git submodule update --init driver/BlackHole && make driver-install`
-   (asks for your password; see [driver/README.md](driver/README.md)).
+   (asks for your password). Step by step, with troubleshooting:
+   [driver/README.md](driver/README.md).
 2. **ffmpeg** with the LAME MP3 encoder: `brew install ffmpeg`.
 3. In the player or in *System Settings › Sound*, set the output to
    **Gocorder**, or tick *Switch the system output to Gocorder while recording*.
