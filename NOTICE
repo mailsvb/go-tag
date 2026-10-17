@@ -1,0 +1,26 @@
+go-tag uses the following third-party software:
+
+- Fyne (fyne.io/fyne/v2) — BSD 3-Clause License
+- id3v2 (github.com/bogem/id3v2) — MIT License
+- go-mp3 (github.com/hajimehoshi/go-mp3) — Apache License 2.0
+- zenity (github.com/ncruces/zenity) — MIT License
+- Go x/image, x/text — BSD 3-Clause License
+
+Recording (macOS):
+
+- malgo / miniaudio (github.com/gen2brain/malgo)
+  The Unlicense / public domain (miniaudio: public domain or MIT-0)
+
+- mediaremote-adapter (third_party/mediaremote-adapter, git submodule, unmodified)
+  © 2025 Jonas van den Berg and contributors — BSD 3-Clause License
+  https://github.com/ungive/mediaremote-adapter
+  Built into go-tag.app as MediaRemoteAdapter.framework; its license is in
+  Contents/Resources/mediaremote-adapter-LICENSE.txt.
+
+- BlackHole (driver/BlackHole, git submodule, unmodified)
+  © 2019–2026 Existential Audio Inc. — GNU General Public License v3.0
+  https://github.com/ExistentialAudio/BlackHole
+  The separate Gocorder audio driver is built from this source (see
+  driver/README.md). It is not part of go-tag.app.
+
+ffmpeg is used as an external program (not linked or bundled) for MP3 encoding.

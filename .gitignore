@@ -4,6 +4,9 @@
 *.app/
 *.zip
 /dist/
+/build/
+/driver/build/
+*.part
 
 # Test / tooling
 *.test

@@ -58,7 +58,7 @@ func newTestApp(t *testing.T, p Picker) *App {
 	t.Helper()
 	test.NewTempApp(t)
 	w := test.NewTempWindow(t, nil)
-	a := New(w, "1.2.3", p)
+	a := New(w, "1.2.3", p, nil)
 	a.run = func(f func()) { f() }
 	w.SetContent(a.Object())
 	w.Resize(fyne.NewSize(1100, 700))

@@ -15,10 +15,12 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mailsvb/go-tag/internal/library"
+	"github.com/mailsvb/go-tag/internal/recorder/session"
 	"github.com/mailsvb/go-tag/internal/tags"
 )
 
-// App is the main window content: toolbar, file table, tag editor and status bar.
+// App is the main window content: toolbar, file table, tag editor and status
+// bar, and with a recorder a second tab for recording.
 type App struct {
 	window  fyne.Window
 	picker  Picker
@@ -29,6 +31,8 @@ type App struct {
 	// replace it to run synchronously.
 	run  func(func())
 	busy bool
+	// queued holds recordings to add to the list once the app is not busy.
+	queued []string
 
 	table  *widget.Table
 	editor *editor
@@ -40,11 +44,15 @@ type App struct {
 	numberBtn, renameBtn, volumeBtn       *widget.Button
 	revertBtn, saveBtn                    *widget.Button
 
+	record *recordTab
+	tabs   *container.AppTabs
+
 	content fyne.CanvasObject
 }
 
-// New builds the UI for window w.
-func New(w fyne.Window, version string, picker Picker) *App {
+// New builds the UI for window w. rec may be nil, which leaves out the Record
+// tab (recording is only supported on macOS).
+func New(w fyne.Window, version string, picker Picker, rec session.Recorder) *App {
 	a := &App{
 		window:  w,
 		picker:  picker,
@@ -85,16 +93,84 @@ func New(w fyne.Window, version string, picker Picker) *App {
 	)
 	split.Offset = 0.66
 	versionLabel := widget.NewLabelWithStyle("v"+version, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true})
-	a.content = container.NewBorder(
+	tagView := container.NewBorder(
 		container.NewVBox(toolbar, widget.NewSeparator()),
 		container.NewVBox(widget.NewSeparator(), container.NewBorder(nil, nil, nil, versionLabel, a.status)),
 		nil, nil, split,
 	)
+	a.content = tagView
 
+	shortcut := func(key fyne.KeyName, mod fyne.KeyModifier, f func()) {
+		w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: key, Modifier: fyne.KeyModifierShortcutDefault | mod},
+			func(fyne.Shortcut) { f() })
+	}
 	w.Canvas().AddShortcut(&fyne.ShortcutSelectAll{}, func(fyne.Shortcut) { a.selectAll() })
-	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierShortcutDefault}, func(fyne.Shortcut) { a.Save() })
+	shortcut(fyne.KeyS, 0, a.Save)
+
+	if rec != nil {
+		a.record = newRecordTab(a, rec)
+		a.tabs = container.NewAppTabs(
+			container.NewTabItemWithIcon("Tag", theme.DocumentCreateIcon(), tagView),
+			container.NewTabItemWithIcon("Record", theme.MediaRecordIcon(), a.record.content),
+		)
+		a.tabs.OnSelected = func(*container.TabItem) {
+			if a.tabs.SelectedIndex() == 1 && !a.record.checked {
+				a.record.check()
+			}
+		}
+		a.content = a.tabs
+		shortcut(fyne.KeyR, 0, a.record.toggle)
+		shortcut(fyne.KeyE, 0, a.record.splitNow)
+		shortcut(fyne.KeyP, 0, a.record.togglePause)
+		shortcut(fyne.KeyM, fyne.KeyModifierShift, a.record.toggleMute)
+		shortcut(fyne.Key1, 0, a.showTagTab)
+		shortcut(fyne.Key2, 0, func() { a.tabs.SelectIndex(1) })
+	}
 	a.refresh()
 	return a
+}
+
+// Started runs once the app is running. It puts the sound output back if a
+// recording that switched it to Gocorder did not end properly.
+func (a *App) Started() {
+	if a.record == nil {
+		return
+	}
+	a.run(func() {
+		name, err := a.record.rec.RestoreOutput()
+		fyne.Do(func() {
+			switch {
+			case err != nil:
+				dialog.ShowError(fmt.Errorf("restoring the sound output: %w", err), a.window)
+			case name != "":
+				dialog.ShowInformation("Sound output restored",
+					"The last recording did not end properly. The sound output was switched back to "+name+".",
+					a.window)
+			}
+		})
+	})
+}
+
+// showTagTab switches to the Tag tab.
+func (a *App) showTagTab() {
+	if a.tabs != nil {
+		a.tabs.SelectIndex(0)
+	}
+}
+
+// addRecorded adds recorded files to the list, as soon as the app is not busy.
+func (a *App) addRecorded(paths []string) {
+	a.queued = append(a.queued, paths...)
+	a.flushQueued()
+}
+
+func (a *App) flushQueued() {
+	if a.busy || len(a.queued) == 0 {
+		return
+	}
+	paths := a.queued
+	a.queued = nil
+	a.LoadPaths(paths)
 }
 
 // Object returns the layout to place into the window.
@@ -103,8 +179,31 @@ func (a *App) Object() fyne.CanvasObject { return a.content }
 // HasPending reports whether there are unsaved changes.
 func (a *App) HasPending() bool { return len(a.lib.Pending()) > 0 }
 
-// ConfirmClose closes the window, asking first if there are unsaved changes.
+// ConfirmClose closes the window, asking first if a recording is running or
+// there are unsaved changes. A running recording is finished first.
 func (a *App) ConfirmClose() {
+	if a.record != nil && a.record.active() {
+		dialog.ShowConfirm("Recording",
+			"A recording is running. Stop it and quit? The current track is saved.",
+			func(ok bool) {
+				if ok {
+					a.record.stop(a.confirmUnsavedThenClose)
+				}
+			}, a.window)
+		return
+	}
+	a.confirmUnsavedThenClose()
+}
+
+// Shutdown finishes a running recording; it blocks until the files are final.
+// It is meant for the app's stop hook, after the window is gone.
+func (a *App) Shutdown() {
+	if a.record != nil {
+		a.record.rec.Stop()
+	}
+}
+
+func (a *App) confirmUnsavedThenClose() {
 	n := len(a.lib.Pending())
 	if n == 0 {
 		a.window.Close()
@@ -360,6 +459,7 @@ func (a *App) changed() {
 func (a *App) setBusy(busy bool) {
 	a.busy = busy
 	a.refresh()
+	a.flushQueued()
 }
 
 // refresh updates the table, status bar and button states.

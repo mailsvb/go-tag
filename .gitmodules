@@ -1,0 +1,6 @@
+[submodule "third_party/mediaremote-adapter"]
+	path = third_party/mediaremote-adapter
+	url = https://github.com/ungive/mediaremote-adapter.git
+[submodule "driver/BlackHole"]
+	path = driver/BlackHole
+	url = https://github.com/ExistentialAudio/BlackHole.git

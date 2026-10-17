@@ -23,6 +23,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # For the recorder's encoder test (skipped without ffmpeg).
+      - name: Install ffmpeg
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install ffmpeg
+
       - name: Check formatting
         if: runner.os == 'macOS'
         run: |

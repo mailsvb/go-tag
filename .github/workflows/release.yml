@@ -87,8 +87,17 @@ jobs:
       - name: Install fyne CLI
         run: go install fyne.io/tools/cmd/fyne@latest
 
-      - name: Package
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
         run: fyne package --target ${{ matrix.target }} --release --app-version "$VERSION" --app-build ${{ github.run_number }}
+
+      # The app bundle also carries the Now Playing adapter for recording; the
+      # BlackHole driver submodule is not needed (the driver is installed separately).
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          git submodule update --init third_party/mediaremote-adapter
+          make app VERSION="$VERSION" BUILD_NO=${{ github.run_number }}
 
       - name: Archive (Windows)
         if: runner.os == 'Windows'
