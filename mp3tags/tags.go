@@ -10,6 +10,10 @@
 // fields. With Overwrite(false) all existing tags are kept and only the
 // managed fields are written on top of them. The audio data is copied
 // unchanged unless WriteAudio is used.
+//
+// Read, ReadAudio, Write and WriteAudio work on local paths. ReadFrom,
+// ReadAudioFrom, WriteTo and WriteAudioTo do the same on an io.ReaderAt and
+// io.Writer, for files that are not on the local disk.
 package mp3tags
 
 import (
@@ -88,24 +92,41 @@ func Read(path string) (Tags, error) {
 		return Tags{}, err
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return Tags{}, err
+	}
+	return ReadFrom(f, fi.Size())
+}
 
+// ReadFrom is Read for the MP3 data r[0:size], e.g. a remote file. Only the
+// tags at the start and the end are read, with a few large ReadAt calls; the
+// audio data is not touched.
+func ReadFrom(r io.ReaderAt, size int64) (Tags, error) {
 	var t Tags
-	tag, err := id3v2.ParseReader(f, id3v2.Options{Parse: true})
+	tag, err := parseFirstID3v2(r, size)
 	switch {
 	case errors.Is(err, id3v2.ErrUnsupportedVersion):
 		// ID3v2.2 is not supported; the ID3v1 fallback below still applies.
 	case err != nil:
 		return Tags{}, fmt.Errorf("parse ID3v2 tag: %w", err)
-	default:
+	case tag != nil:
 		t = fromID3v2(tag)
 	}
-
-	if fi, err := f.Stat(); err == nil {
-		if v1, ok := readID3v1(f, fi.Size()); ok {
-			t.fillFrom(v1)
-		}
+	if v1, ok := readID3v1(r, size); ok {
+		t.fillFrom(v1)
 	}
 	return t, nil
+}
+
+// parseFirstID3v2 parses the ID3v2 tag at the start of r[0:size]. It returns
+// nil and no error if there is none.
+func parseFirstID3v2(r io.ReaderAt, size int64) (*id3v2.Tag, error) {
+	b, err := readFirstID3v2(r, size)
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return id3v2.ParseReader(bytes.NewReader(b), id3v2.Options{Parse: true})
 }
 
 func fromID3v2(tag *id3v2.Tag) Tags {
@@ -241,33 +262,48 @@ func ReadAudio(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	start, end, err := audioRange(f, fi.Size())
+	return ReadAudioFrom(f, fi.Size())
+}
+
+// ReadAudioFrom is ReadAudio for the MP3 data r[0:size], e.g. a remote file.
+func ReadAudioFrom(r io.ReaderAt, size int64) ([]byte, error) {
+	start, end, err := audioRange(r, size)
 	if err != nil {
 		return nil, err
 	}
 	audio := make([]byte, end-start)
-	if _, err := f.ReadAt(audio, start); err != nil {
+	if err := readAt(r, audio, start); err != nil {
 		return nil, err
 	}
 	return audio, nil
 }
 
-func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Option) (err error) {
+// WriteTo is Write for the MP3 data src[0:size], e.g. a remote file: the
+// complete new file (tags, audio, trailing tags) is written to w, which may
+// stream it to its destination. Unlike Write there is no temporary file, so
+// if WriteTo fails the caller must discard what was written to w. src and w
+// must not refer to the same data.
+func WriteTo(w io.Writer, src io.ReaderAt, size int64, t Tags, opts ...Option) error {
+	return writeTo(w, src, size, t, nil, opts)
+}
+
+// WriteAudioTo is WriteTo, but the audio data is passed through transform
+// first, as in WriteAudio.
+func WriteAudioTo(w io.Writer, src io.ReaderAt, size int64, t Tags, transform func(audio []byte) error, opts ...Option) error {
+	return writeTo(w, src, size, t, transform, opts)
+}
+
+// copyBufSize is the chunk size for copying the audio data; large chunks keep
+// the number of ReadAt calls on remote files low.
+const copyBufSize = 1 << 20
+
+func writeTo(w io.Writer, src io.ReaderAt, size int64, t Tags, transform func(audio []byte) error, opts []Option) error {
 	o := options{overwrite: true}
 	for _, opt := range opts {
 		opt(&o)
 	}
 
-	src, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	fi, err := src.Stat()
-	if err != nil {
-		return err
-	}
-	start, end, err := audioRange(src, fi.Size())
+	start, end, err := audioRange(src, size)
 	if err != nil {
 		return err
 	}
@@ -279,8 +315,8 @@ func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Opt
 			return err
 		}
 		merge(tag, t)
-		trailer = make([]byte, fi.Size()-end)
-		if _, err := src.ReadAt(trailer, end); err != nil {
+		trailer = make([]byte, size-end)
+		if err := readAt(src, trailer, end); err != nil {
 			return err
 		}
 		if n := len(trailer); n >= id3v1Size && string(trailer[n-id3v1Size:n-id3v1Size+3]) == "TAG" {
@@ -295,7 +331,7 @@ func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Opt
 	var audio io.Reader = io.NewSectionReader(src, start, end-start)
 	if transform != nil {
 		b := make([]byte, end-start)
-		if _, err := src.ReadAt(b, start); err != nil {
+		if err := readAt(src, b, start); err != nil {
 			return err
 		}
 		if err := transform(b); err != nil {
@@ -305,6 +341,29 @@ func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Opt
 			return errors.New("audio length changed")
 		}
 		audio = bytes.NewReader(b)
+	}
+
+	if _, err := w.Write(tagBuf.Bytes()); err != nil {
+		return err
+	}
+	if _, err := io.CopyBuffer(w, audio, make([]byte, copyBufSize)); err != nil {
+		return err
+	}
+	if _, err := w.Write(trailer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Option) (err error) {
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	fi, err := src.Stat()
+	if err != nil {
+		return err
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".go-tag-*.tmp")
@@ -317,13 +376,7 @@ func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Opt
 			os.Remove(tmp.Name())
 		}
 	}()
-	if _, err = tmp.Write(tagBuf.Bytes()); err != nil {
-		return err
-	}
-	if _, err = io.Copy(tmp, audio); err != nil {
-		return err
-	}
-	if _, err = tmp.Write(trailer); err != nil {
+	if err = writeTo(tmp, src, fi.Size(), t, transform, opts); err != nil {
 		return err
 	}
 	if err = tmp.Sync(); err != nil {
@@ -363,12 +416,9 @@ func build(t Tags) *id3v2.Tag {
 // existingTag parses the first ID3v2 tag in r[0:size]. A missing or
 // unsupported (ID3v2.2) tag yields a new empty tag.
 func existingTag(r io.ReaderAt, size int64) (*id3v2.Tag, error) {
-	if size == 0 {
-		return newTag(), nil
-	}
-	tag, err := id3v2.ParseReader(io.NewSectionReader(r, 0, size), id3v2.Options{Parse: true})
+	tag, err := parseFirstID3v2(r, size)
 	switch {
-	case errors.Is(err, id3v2.ErrUnsupportedVersion):
+	case errors.Is(err, id3v2.ErrUnsupportedVersion), err == nil && tag == nil:
 		return newTag(), nil
 	case err != nil:
 		return nil, fmt.Errorf("parse ID3v2 tag: %w", err)

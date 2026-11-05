@@ -38,25 +38,68 @@ func audioRange(r io.ReaderAt, size int64) (start, end int64, err error) {
 // skipID3v2 returns the offset after all ID3v2 tags at the start of the file.
 func skipID3v2(r io.ReaderAt, size int64) (int64, error) {
 	var off int64
-	hdr := make([]byte, 10)
-	for off+10 <= size {
-		if _, err := r.ReadAt(hdr, off); err != nil {
+	for {
+		n, err := id3v2SizeAt(r, off, size)
+		if err != nil {
 			return 0, err
 		}
-		if string(hdr[:3]) != "ID3" {
-			break
-		}
-		n := int64(hdr[6]&0x7f)<<21 | int64(hdr[7]&0x7f)<<14 | int64(hdr[8]&0x7f)<<7 | int64(hdr[9]&0x7f)
-		n += 10
-		if hdr[3] == 4 && hdr[5]&0x10 != 0 {
-			n += 10 // footer
+		if n == 0 {
+			return off, nil
 		}
 		if off+n > size {
 			return 0, errors.New("ID3v2 tag size exceeds file size")
 		}
 		off += n
 	}
-	return off, nil
+}
+
+// id3v2SizeAt returns the total size (header, frames and footer) that the
+// header of the ID3v2 tag starting at off declares, or 0 if there is none.
+// The size is not checked against the file size.
+func id3v2SizeAt(r io.ReaderAt, off, size int64) (int64, error) {
+	if off+10 > size {
+		return 0, nil
+	}
+	hdr := make([]byte, 10)
+	if err := readAt(r, hdr, off); err != nil {
+		return 0, err
+	}
+	if string(hdr[:3]) != "ID3" {
+		return 0, nil
+	}
+	n := int64(hdr[6]&0x7f)<<21 | int64(hdr[7]&0x7f)<<14 | int64(hdr[8]&0x7f)<<7 | int64(hdr[9]&0x7f)
+	n += 10
+	if hdr[3] == 4 && hdr[5]&0x10 != 0 {
+		n += 10 // footer
+	}
+	return n, nil
+}
+
+// readFirstID3v2 returns the bytes of the ID3v2 tag at the start of r[0:size],
+// read with a single ReadAt after the header, or nil if there is none. A tag
+// that claims to extend past size is cut off at size.
+// Parsing from memory avoids the many small reads id3v2.ParseReader makes,
+// which are expensive on remote files.
+func readFirstID3v2(r io.ReaderAt, size int64) ([]byte, error) {
+	n, err := id3v2SizeAt(r, 0, size)
+	if err != nil || n == 0 {
+		return nil, err
+	}
+	b := make([]byte, min(n, size))
+	if err := readAt(r, b, 0); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// readAt fills b from r at off. A full read that ends at the end of the input
+// is a success even if r reports io.EOF, as io.ReaderAt allows.
+func readAt(r io.ReaderAt, b []byte, off int64) error {
+	n, err := r.ReadAt(b, off)
+	if n == len(b) && errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 // trailingTagSize returns the size of a tag ending at end, or 0 if there is none.
@@ -66,7 +109,7 @@ func trailingTagSize(r io.ReaderAt, start, end int64) int64 {
 			return nil
 		}
 		b := make([]byte, n)
-		if _, err := r.ReadAt(b, off); err != nil {
+		if err := readAt(r, b, off); err != nil {
 			return nil
 		}
 		return b
@@ -108,7 +151,7 @@ func readID3v1(r io.ReaderAt, size int64) (Tags, bool) {
 		return Tags{}, false
 	}
 	b := make([]byte, id3v1Size)
-	if _, err := r.ReadAt(b, size-id3v1Size); err != nil || string(b[:3]) != "TAG" {
+	if err := readAt(r, b, size-id3v1Size); err != nil || string(b[:3]) != "TAG" {
 		return Tags{}, false
 	}
 	t := Tags{

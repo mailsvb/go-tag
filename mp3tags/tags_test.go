@@ -436,7 +436,7 @@ func TestWriteDeltaNoExistingTag(t *testing.T) {
 	}
 	a, _ := os.ReadFile(overwrite)
 	b, _ := os.ReadFile(delta)
-	if !bytes.Equal(a, b) {
+	if !sameFile(t, a, b) {
 		t.Error("delta write of an untagged file differs from overwrite")
 	}
 }

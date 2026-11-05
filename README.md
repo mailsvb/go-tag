@@ -148,6 +148,21 @@ t.Gain.TrackGain, t.Gain.TrackPeak = c.ReplayGain()
 err = mp3tags.WriteAudio(path, t, func(a []byte) error { return mp3gain.Apply(a, c.Steps) })
 ```
 
+Files that are not on the local disk (SFTP, SMB, object stores …) use the io
+counterparts `ReadFrom`, `ReadAudioFrom`, `WriteTo` and `WriteAudioTo`. They take
+an `io.ReaderAt` plus its size; reading tags only fetches the head and the tail
+of the file in a few large reads, and writing streams the complete new file into
+an `io.Writer`:
+
+```go
+t, err := mp3tags.ReadFrom(remote, size) // remote is an io.ReaderAt
+t.Title = "New title"
+
+pr, pw := io.Pipe()
+go func() { pw.CloseWithError(mp3tags.WriteTo(pw, remote, size, t)) }()
+err = store.Put(name, pr) // the upload fails if WriteTo fails
+```
+
 The app uses the copies in this repository through the `replace` lines in the
 root `go.mod`; those lines have no effect on other modules that import the libraries.
 
