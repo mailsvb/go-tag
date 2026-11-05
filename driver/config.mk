@@ -6,7 +6,7 @@ BUNDLE_ID    ?= dev.local.gocorder.driver
 FACTORY_UUID ?= 9C3D4A19-43FC-440A-8897-8FA322441421
 MANUFACTURER ?= gocorder
 CHANNELS     ?= 2
-VERSION      ?= 0.7.1-gocorder.1
+VERSION      ?= 0.7.2-gocorder.1
 
 # "-" = ad-hoc signature. Set to "Developer ID Application: Name (TEAMID)" if needed.
 SIGN_ID      ?= -

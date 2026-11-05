@@ -60,7 +60,7 @@ output is switched to Gocorder, it switches back on the next start.
 
 ## Prerequisites
 
-- Go 1.27.2 or newer (see `go.mod`; with `GOTOOLCHAIN=auto` an older Go downloads it automatically)
+- Go 1.27.3 or newer (see `go.mod`; with `GOTOOLCHAIN=auto` an older Go downloads it automatically)
 - A C compiler, because Fyne uses CGO for OpenGL/windowing:
   - **Windows:** e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT` (or MSYS2 MinGW-w64), then make sure `gcc` is on `PATH`
   - **macOS:** `xcode-select --install`
