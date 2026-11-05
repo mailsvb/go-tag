@@ -102,8 +102,46 @@ func readAt(r io.ReaderAt, b []byte, off int64) error {
 	return err
 }
 
+// trailerKind is the type of a tag after the audio data.
+type trailerKind int
+
+const (
+	kindNone trailerKind = iota
+	kindID3v1
+	kindAPE
+	kindLyrics3
+)
+
+// span is one tag after the audio data.
+type span struct {
+	off, n int64
+	kind   trailerKind
+}
+
+// trailerSpans returns the tags ending at end, in file order. start is the
+// lowest offset a tag may begin at.
+func trailerSpans(r io.ReaderAt, start, end int64) []span {
+	var s []span
+	for {
+		n, kind := trailingTag(r, start, end)
+		if n == 0 {
+			break
+		}
+		end -= n
+		s = append([]span{{end, n, kind}}, s...)
+	}
+	return s
+}
+
 // trailingTagSize returns the size of a tag ending at end, or 0 if there is none.
 func trailingTagSize(r io.ReaderAt, start, end int64) int64 {
+	n, _ := trailingTag(r, start, end)
+	return n
+}
+
+// trailingTag returns the size and kind of a tag ending at end, or 0 if there
+// is none.
+func trailingTag(r io.ReaderAt, start, end int64) (int64, trailerKind) {
 	at := func(off int64, n int) []byte {
 		if off < start || off+int64(n) > end {
 			return nil
@@ -118,9 +156,9 @@ func trailingTagSize(r io.ReaderAt, start, end int64) int64 {
 	// ID3v1, optionally preceded by an extended "TAG+" block.
 	if b := at(end-id3v1Size, 3); string(b) == "TAG" {
 		if b := at(end-id3v1Size-id3v1ExtSize, 4); string(b) == "TAG+" {
-			return id3v1Size + id3v1ExtSize
+			return id3v1Size + id3v1ExtSize, kindID3v1
 		}
-		return id3v1Size
+		return id3v1Size, kindID3v1
 	}
 
 	// APEv2 footer: "APETAGEX", version, size (incl. footer), items, flags.
@@ -130,7 +168,7 @@ func trailingTagSize(r io.ReaderAt, start, end int64) int64 {
 			n += apeFooter // header present
 		}
 		if n >= apeFooter && end-n >= start {
-			return n
+			return n, kindAPE
 		}
 	}
 
@@ -138,11 +176,43 @@ func trailingTagSize(r io.ReaderAt, start, end int64) int64 {
 	if b := at(end-15, 15); b != nil && string(b[6:]) == "LYRICS200" {
 		if n, err := strconv.Atoi(string(b[:6])); err == nil && end-int64(n)-15 >= start {
 			if lb := at(end-int64(n)-15, 11); string(lb) == "LYRICSBEGIN" {
-				return int64(n) + 15
+				return int64(n) + 15, kindLyrics3
 			}
 		}
 	}
-	return 0
+	return 0, kindNone
+}
+
+// tailWindow is how much of the end of a file ReadFrom fetches at once; it
+// holds the usual APEv2, Lyrics3 and ID3v1 tags.
+const tailWindow = 4096
+
+// tailCache is an io.ReaderAt that answers reads within [off, off+len(b))
+// from b, read with a single ReadAt, and passes all other reads through.
+type tailCache struct {
+	r   io.ReaderAt
+	off int64
+	b   []byte
+}
+
+// newTailCache caches r[max(from, size-tailWindow):size].
+func newTailCache(r io.ReaderAt, from, size int64) (*tailCache, error) {
+	off := max(from, size-tailWindow)
+	c := &tailCache{r: r, off: off}
+	if off < size {
+		c.b = make([]byte, size-off)
+		if err := readAt(r, c.b, off); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+func (c *tailCache) ReadAt(p []byte, off int64) (int, error) {
+	if off >= c.off && off+int64(len(p)) <= c.off+int64(len(c.b)) {
+		return copy(p, c.b[off-c.off:]), nil
+	}
+	return c.r.ReadAt(p, off)
 }
 
 // readID3v1 parses an ID3v1(.1) tag at the end of the file.

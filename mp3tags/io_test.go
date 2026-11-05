@@ -144,7 +144,7 @@ func TestReadFromFewReads(t *testing.T) {
 	if r.reads > 3 {
 		t.Errorf("ReadFrom made %d ReadAt calls, want <= 3", r.reads)
 	}
-	if limit := int64(len(head) + 10 + id3v1Size); r.read > limit {
+	if limit := int64(len(head) + 10 + tailWindow); r.read > limit {
 		t.Errorf("ReadFrom read %d bytes, want <= %d (no audio)", r.read, limit)
 	}
 }

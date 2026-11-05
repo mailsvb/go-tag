@@ -168,3 +168,42 @@ func TestBits(t *testing.T) {
 		}
 	}
 }
+
+// Silent granules (global_gain 0) are left alone, as MP3Gain does, and do not
+// limit how far the level can be lowered.
+func TestApplyKeepsSilence(t *testing.T) {
+	for _, s := range specs {
+		orig := synthStream(t, s, 20)
+		fs, err := frames(orig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := fs[len(fs)-1]
+		setByte(orig[f.sideInfo():], f.gainBits()[0], 0)
+		if s.crc {
+			c := frameCRC(orig, f)
+			orig[f.off+4], orig[f.off+5] = byte(c>>8), byte(c)
+		}
+		st, err := Scan(orig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.MinGain < 100 || st.MaxDown() != st.MinGain-1 {
+			t.Errorf("%s: Scan = %+v, MaxDown %d; want the 0 ignored", s.name, st, st.MaxDown())
+		}
+
+		audio := bytes.Clone(orig)
+		if err := Apply(audio, -st.MaxDown()); err != nil {
+			t.Fatalf("%s: Apply(-MaxDown) = %v", s.name, err)
+		}
+		if g := getByte(audio[f.sideInfo():], f.gainBits()[0]); g != 0 {
+			t.Errorf("%s: silent granule changed to %d", s.name, g)
+		}
+		if after, _ := Scan(audio); after.MinGain != 1 {
+			t.Errorf("%s: MinGain after Apply(-MaxDown) = %d, want 1", s.name, after.MinGain)
+		}
+		if err := Apply(audio, st.MaxDown()); err != nil || !bytes.Equal(audio, orig) {
+			t.Errorf("%s: undo = %v, restores original = %v", s.name, err, bytes.Equal(audio, orig))
+		}
+	}
+}

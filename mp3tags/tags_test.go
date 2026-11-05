@@ -345,7 +345,7 @@ func TestWriteDeltaKeepsOtherTags(t *testing.T) {
 		t.Errorf("version = %d, want 4", v)
 	}
 	wantIDs := map[string]int{"TIT2": 1, "TPE1": 1, "TPE2": 1, "TALB": 1, "TCON": 1, "TDRC": 1, "TRCK": 1,
-		"COMM": 1, "TXXX": 3, "APIC": 2}
+		"COMM": 1, "TXXX": 2, "APIC": 2}
 	if fmt.Sprint(ids) != fmt.Sprint(wantIDs) {
 		t.Errorf("frames = %v, want %v", ids, wantIDs)
 	}
@@ -382,9 +382,14 @@ func TestWriteDeltaKeepsOtherTags(t *testing.T) {
 	if !bytes.HasPrefix(rest, audio) {
 		t.Fatal("audio data changed")
 	}
+	// The APEv2 tag keeps its item and gains the undo information.
 	rest = rest[len(audio):]
-	if !bytes.HasPrefix(rest, ape) {
-		t.Error("APEv2 tag not kept")
+	items := readAPE(bytes.NewReader(data), int64(len(data)-len(rest)), int64(len(data)))
+	if title, _ := apeValue(items, "Title"); title != "APE Title" {
+		t.Errorf("APEv2 Title = %q, want it kept", title)
+	}
+	if u, _ := apeValue(items, keyUndo); u != "-002,-002,N" {
+		t.Errorf("APEv2 %s = %q, want -002,-002,N", keyUndo, u)
 	}
 	v1, ok := readID3v1(bytes.NewReader(data), int64(len(data)))
 	if !ok || v1.Title != "Neuer Titel" || v1.Artist != "Artist" || v1.Track != "3" || v1.Genre != "Rock" || v1.Year != "2020" {
@@ -455,7 +460,7 @@ func TestWriteAudioDelta(t *testing.T) {
 	if got, err := Read(path); err != nil || !got.Equal(want) {
 		t.Errorf("Read = %+v, %v, want %+v", got, err, want)
 	}
-	if _, ids := frameIDs(t, path); ids["COMM"] != 1 || ids["TXXX"] != 2 {
-		t.Errorf("frames = %v, want COMM and both TXXX kept", ids)
+	if _, ids := frameIDs(t, path); ids["COMM"] != 1 || ids["TXXX"] != 1 {
+		t.Errorf("frames = %v, want COMM and the TXXX kept", ids)
 	}
 }

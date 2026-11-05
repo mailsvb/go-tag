@@ -7,9 +7,14 @@
 //
 // By default writing replaces every existing tag (all other ID3v2 frames,
 // ID3v1, Lyrics3 and APEv2) with a fresh ID3v2.3 tag holding just these
-// fields. With Overwrite(false) all existing tags are kept and only the
-// managed fields are written on top of them. The audio data is copied
-// unchanged unless WriteAudio is used.
+// fields, plus an APEv2 tag holding only the undo information of a gain
+// change, if there is one. With Overwrite(false) all existing tags are kept
+// and only the managed fields are written on top of them. The audio data is
+// copied unchanged unless WriteAudio is used.
+//
+// The gain change is recorded in the APEv2 item MP3GAIN_UNDO, as MP3Gain
+// does, so "mp3gain -u" undoes a change made with this package and Gain.Steps
+// reports changes made by MP3Gain.
 //
 // Read, ReadAudio, Write and WriteAudio work on local paths. ReadFrom,
 // ReadAudioFrom, WriteTo and WriteAudioTo do the same on an io.ReaderAt and
@@ -23,7 +28,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/bogem/id3v2/v2"
@@ -61,14 +65,19 @@ type Tags struct {
 type Gain struct {
 	// Steps is the total global_gain change (1.5 dB each) applied to the
 	// audio frames; applying -Steps restores the original level. It is
-	// stored in the TXXX frame "GO-TAG_GAIN_STEPS".
+	// stored as MP3Gain stores it: the APEv2 item MP3GAIN_UNDO holds -Steps
+	// for both channels ("-003,-003,N" for Steps = 3). Reading also accepts
+	// the TXXX frame MP3GAIN_UNDO (written by "mp3gain -s i") and the TXXX
+	// frame GO-TAG_GAIN_STEPS of older go-tag versions. If MP3Gain changed
+	// the channels by different amounts, Steps is the left channel's change;
+	// writing a new Steps shifts both channels by the same amount.
 	Steps int
 	// ReplayGain values as stored in the tag, e.g. "-0.42 dB" and "0.912345";
 	// empty if absent.
 	TrackGain, TrackPeak, AlbumGain, AlbumPeak string
 }
 
-// TXXX descriptions of the Gain fields.
+// TXXX descriptions of the Gain fields. txxxSteps is only read.
 const (
 	txxxSteps     = "GO-TAG_GAIN_STEPS"
 	txxxTrackGain = "REPLAYGAIN_TRACK_GAIN"
@@ -104,7 +113,8 @@ func Read(path string) (Tags, error) {
 // audio data is not touched.
 func ReadFrom(r io.ReaderAt, size int64) (Tags, error) {
 	var t Tags
-	tag, err := parseFirstID3v2(r, size)
+	var gain gainState
+	tag, head, err := parseFirstID3v2(r, size)
 	switch {
 	case errors.Is(err, id3v2.ErrUnsupportedVersion):
 		// ID3v2.2 is not supported; the ID3v1 fallback below still applies.
@@ -112,21 +122,44 @@ func ReadFrom(r io.ReaderAt, size int64) (Tags, error) {
 		return Tags{}, fmt.Errorf("parse ID3v2 tag: %w", err)
 	case tag != nil:
 		t = fromID3v2(tag)
+		gain.readID3Gain(tag)
 	}
-	if v1, ok := readID3v1(r, size); ok {
+	tail, err := newTailCache(r, head, size)
+	if err != nil {
+		return Tags{}, err
+	}
+	if v1, ok := readID3v1(tail, size); ok {
 		t.fillFrom(v1)
 	}
+	gain.readAPEGain(readAPE(tail, head, size))
+	t.Gain.Steps = gain.steps()
 	return t, nil
 }
 
-// parseFirstID3v2 parses the ID3v2 tag at the start of r[0:size]. It returns
-// nil and no error if there is none.
-func parseFirstID3v2(r io.ReaderAt, size int64) (*id3v2.Tag, error) {
+// readAPE returns the items of the APEv2 tag among the tags at the end of
+// r[start:size], or nil if there is none.
+func readAPE(r io.ReaderAt, start, size int64) []apeItem {
+	for _, sp := range trailerSpans(r, start, size) {
+		if sp.kind == kindAPE {
+			b := make([]byte, sp.n)
+			if readAt(r, b, sp.off) != nil {
+				return nil
+			}
+			return parseAPE(b)
+		}
+	}
+	return nil
+}
+
+// parseFirstID3v2 parses the ID3v2 tag at the start of r[0:size] and returns
+// it with its size. It returns nil and no error if there is none.
+func parseFirstID3v2(r io.ReaderAt, size int64, onlyFrames ...string) (*id3v2.Tag, int64, error) {
 	b, err := readFirstID3v2(r, size)
 	if err != nil || b == nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return id3v2.ParseReader(bytes.NewReader(b), id3v2.Options{Parse: true})
+	tag, err := id3v2.ParseReader(bytes.NewReader(b), id3v2.Options{Parse: true, ParseFrames: onlyFrames})
+	return tag, int64(len(b)), err
 }
 
 func fromID3v2(tag *id3v2.Tag) Tags {
@@ -162,8 +195,6 @@ func fromID3v2(tag *id3v2.Tag) Tags {
 		}
 		value := cleanText(uf.Value)
 		switch strings.ToUpper(cleanText(uf.Description)) {
-		case txxxSteps:
-			t.Gain.Steps, _ = strconv.Atoi(value)
 		case txxxTrackGain:
 			t.Gain.TrackGain = value
 		case txxxTrackPeak:
@@ -308,16 +339,58 @@ func writeTo(w io.Writer, src io.ReaderAt, size int64, t Tags, transform func(au
 		return err
 	}
 
-	tag := build(t)
-	var trailer []byte // tags after the audio data, kept in delta mode
-	if !o.overwrite {
+	// The tags after the audio data and the gain change recorded so far.
+	trailer := make([]byte, size-end)
+	if err := readAt(src, trailer, end); err != nil {
+		return err
+	}
+	spans := trailerSpans(bytes.NewReader(trailer), 0, int64(len(trailer)))
+	var gain gainState
+	var apeItems []apeItem
+	apeAt := -1
+	for i, sp := range spans {
+		if sp.kind == kindAPE {
+			apeAt, apeItems = i, parseAPE(trailer[sp.off:sp.off+sp.n])
+			gain.readAPEGain(apeItems)
+		}
+	}
+	var tag *id3v2.Tag
+	if o.overwrite {
+		// Only the gain frames of the old tag matter; an unreadable tag is
+		// replaced anyway.
+		if old, _, err := parseFirstID3v2(src, start, "TXXX"); err == nil {
+			gain.readID3Gain(old)
+		}
+	} else {
 		if tag, err = existingTag(src, start); err != nil {
 			return err
 		}
+		gain.readID3Gain(tag)
+	}
+
+	// The new undo value: the old one minus the additional change.
+	cur := gain.effective()
+	delta := t.Gain.Steps + cur.left // new Steps - old Steps
+	next := undo{left: cur.left - delta, right: cur.right - delta, wrap: cur.wrap}
+	if delta != 0 {
+		next.wrap = 'N'
+	}
+
+	if o.overwrite {
+		tag = build(t)
+		trailer = encodeAPE(undoItems(next))
+	} else {
 		merge(tag, t)
-		trailer = make([]byte, size-end)
-		if err := readAt(src, trailer, end); err != nil {
-			return err
+		if delta != 0 || gain.legacy != 0 {
+			// Record the undo value in the APEv2 tag only. The cached
+			// global_gain ranges and MP3Gain's ReplayGain values no longer
+			// apply after a change; MP3Gain recomputes them.
+			minMax := func(k string) bool { return delta != 0 && (k == keyMinMax || k == keyAlbumMinMax) }
+			removeTXXX(tag, func(d string) bool { return d == txxxSteps || d == keyUndo || minMax(d) })
+			items := withoutAPE(apeItems, func(k string) bool {
+				return k == keyUndo || minMax(k) || delta != 0 && strings.HasPrefix(k, "REPLAYGAIN_")
+			})
+			trailer = replaceAPE(trailer, spans, apeAt, encodeAPE(append(items, undoItems(next)...)))
 		}
 		if n := len(trailer); n >= id3v1Size && string(trailer[n-id3v1Size:n-id3v1Size+3]) == "TAG" {
 			updateID3v1(trailer[n-id3v1Size:], t)
@@ -416,7 +489,7 @@ func build(t Tags) *id3v2.Tag {
 // existingTag parses the first ID3v2 tag in r[0:size]. A missing or
 // unsupported (ID3v2.2) tag yields a new empty tag.
 func existingTag(r io.ReaderAt, size int64) (*id3v2.Tag, error) {
-	tag, err := parseFirstID3v2(r, size)
+	tag, _, err := parseFirstID3v2(r, size)
 	switch {
 	case errors.Is(err, id3v2.ErrUnsupportedVersion), err == nil && tag == nil:
 		return newTag(), nil
@@ -453,16 +526,10 @@ func merge(tag *id3v2.Tag, t Tags) {
 	setText(t.Year, cur.Year, tag.CommonID("Year"), "TYER", "TDRC")
 	setText(t.Track, cur.Track, "TRCK")
 
-	if t.Gain != cur.Gain {
-		frames := tag.GetFrames("TXXX")
-		tag.DeleteFrames("TXXX")
-		for _, fr := range frames {
-			if uf, ok := fr.(id3v2.UserDefinedTextFrame); ok && isGainTXXX(uf.Description) {
-				continue
-			}
-			tag.AddFrame("TXXX", fr)
-		}
-		addGain(tag, t.Gain)
+	if g := t.Gain; g.TrackGain != cur.Gain.TrackGain || g.TrackPeak != cur.Gain.TrackPeak ||
+		g.AlbumGain != cur.Gain.AlbumGain || g.AlbumPeak != cur.Gain.AlbumPeak {
+		removeTXXX(tag, isReplayGainTXXX)
+		addGain(tag, g)
 	}
 
 	if !t.Cover.Equal(cur.Cover) {
@@ -481,12 +548,49 @@ func merge(tag *id3v2.Tag, t Tags) {
 	}
 }
 
-func isGainTXXX(desc string) bool {
-	switch strings.ToUpper(cleanText(desc)) {
-	case txxxSteps, txxxTrackGain, txxxTrackPeak, txxxAlbumGain, txxxAlbumPeak:
+func isReplayGainTXXX(desc string) bool {
+	switch desc {
+	case txxxTrackGain, txxxTrackPeak, txxxAlbumGain, txxxAlbumPeak:
 		return true
 	}
 	return false
+}
+
+// removeTXXX removes the TXXX frames whose upper-case description matches drop.
+func removeTXXX(tag *id3v2.Tag, drop func(desc string) bool) {
+	frames := tag.GetFrames("TXXX")
+	tag.DeleteFrames("TXXX")
+	for _, fr := range frames {
+		if uf, ok := fr.(id3v2.UserDefinedTextFrame); ok && drop(strings.ToUpper(cleanText(uf.Description))) {
+			continue
+		}
+		tag.AddFrame("TXXX", fr)
+	}
+}
+
+// undoItems returns the APEv2 item recording u, or none if u is zero.
+func undoItems(u undo) []apeItem {
+	if u.zero() {
+		return nil
+	}
+	return []apeItem{{key: keyUndo, value: []byte(u.String())}}
+}
+
+// replaceAPE returns trailer with the APEv2 tag spans[at] replaced by ape
+// (which may be empty). Without one (at < 0), ape is inserted before an
+// ID3v1 tag, which must stay last, or appended.
+func replaceAPE(trailer []byte, spans []span, at int, ape []byte) []byte {
+	off, n := int64(len(trailer)), int64(0)
+	switch {
+	case at >= 0:
+		off, n = spans[at].off, spans[at].n
+	case len(spans) > 0 && spans[len(spans)-1].kind == kindID3v1:
+		off = spans[len(spans)-1].off
+	}
+	out := make([]byte, 0, int64(len(trailer))-n+int64(len(ape)))
+	out = append(out, trailer[:off]...)
+	out = append(out, ape...)
+	return append(out, trailer[off+n:]...)
 }
 
 // addText adds a text frame in the tag's default encoding unless value is empty.
@@ -496,7 +600,8 @@ func addText(tag *id3v2.Tag, id, value string) {
 	}
 }
 
-// addGain adds the TXXX frames of the non-empty values of g.
+// addGain adds the TXXX frames of the non-empty ReplayGain values of g; the
+// applied change (g.Steps) goes into the APEv2 tag.
 func addGain(tag *id3v2.Tag, g Gain) {
 	add := func(desc, value string) {
 		if value = strings.TrimSpace(value); value != "" {
@@ -504,9 +609,6 @@ func addGain(tag *id3v2.Tag, g Gain) {
 				Encoding: id3v2.EncodingISO, Description: desc, Value: value,
 			})
 		}
-	}
-	if g.Steps != 0 {
-		add(txxxSteps, strconv.Itoa(g.Steps))
 	}
 	add(txxxTrackGain, g.TrackGain)
 	add(txxxTrackPeak, g.TrackPeak)

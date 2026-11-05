@@ -1,4 +1,4 @@
-// Package gain measures the loudness of MP3 files and changes their volume
+// Package mp3gain measures the loudness of MP3 files and changes their volume
 // without re-encoding.
 //
 // Every MPEG Layer III granule stores a global_gain value per channel in the
@@ -6,6 +6,9 @@
 // 2^(global_gain/4). Changing that value by one step changes the level by
 // exactly 1.5 dB (the same technique MP3Gain uses). The Huffman coded audio
 // data is not touched, so a change can be undone exactly.
+//
+// As in MP3Gain, a global_gain of 0 (digital silence) is never changed, so a
+// change made by one program can be undone by the other.
 package mp3gain
 
 import (
@@ -203,16 +206,19 @@ type Stats struct {
 	Frames     int
 	SampleRate int
 	Mono       bool
-	// MinGain and MaxGain are the smallest and largest global_gain values.
-	// A change of s steps is possible if MinGain+s >= 0 and MaxGain+s <= 255.
+	// MinGain and MaxGain are the smallest and largest global_gain values
+	// other than 0, which is never changed; both are 0 if there are none.
+	// A change of s steps is possible if MinGain+s >= 1 and MaxGain+s <= 255.
 	MinGain, MaxGain int
 }
 
 // MaxUp returns how many steps the level can be raised.
 func (s Stats) MaxUp() int { return 255 - s.MaxGain }
 
-// MaxDown returns how many steps the level can be lowered.
-func (s Stats) MaxDown() int { return s.MinGain }
+// MaxDown returns how many steps the level can be lowered. Values may not
+// reach 0, which would make them silent and unchangeable, so the change could
+// no longer be undone.
+func (s Stats) MaxDown() int { return max(s.MinGain-1, 0) }
 
 // Scan returns the Stats of the audio frames in audio.
 func Scan(audio []byte) (Stats, error) {
@@ -228,20 +234,25 @@ func Scan(audio []byte) (Stats, error) {
 		s.Frames++
 		side := audio[f.sideInfo():]
 		for _, bit := range f.gainBits() {
-			g := int(getByte(side, bit))
-			s.MinGain = min(s.MinGain, g)
-			s.MaxGain = max(s.MaxGain, g)
+			if g := int(getByte(side, bit)); g != 0 {
+				s.MinGain = min(s.MinGain, g)
+				s.MaxGain = max(s.MaxGain, g)
+			}
 		}
 	}
 	if s.Frames == 0 {
 		return Stats{}, ErrNoFrames
 	}
+	if s.MaxGain == 0 {
+		s.MinGain = 0 // only silence
+	}
 	return s, nil
 }
 
-// Apply changes the level of audio in place by steps × 1.5 dB. It fails with
-// ErrOutOfRange, leaving audio unchanged, if any global_gain value would leave
-// the range 0..255, so Apply(audio, -steps) always restores the original.
+// Apply changes the level of audio in place by steps × 1.5 dB. global_gain
+// values of 0 stay unchanged. It fails with ErrOutOfRange, leaving audio
+// unchanged, if any other value would leave the range 1..255, so
+// Apply(audio, -steps) always restores the original.
 func Apply(audio []byte, steps int) error {
 	s, err := Scan(audio)
 	if err != nil {
@@ -261,7 +272,9 @@ func Apply(audio []byte, steps int) error {
 		side := audio[f.sideInfo() : f.sideInfo()+f.sideInfoSize()]
 		crcOK := f.crc && frameCRC(audio, f) == uint16(audio[f.off+4])<<8|uint16(audio[f.off+5])
 		for _, bit := range f.gainBits() {
-			setByte(side, bit, byte(int(getByte(side, bit))+steps))
+			if g := int(getByte(side, bit)); g != 0 {
+				setByte(side, bit, byte(g+steps))
+			}
 		}
 		// A CRC that did not match before is left alone, so undoing the change
 		// restores the original bytes.

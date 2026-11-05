@@ -16,13 +16,13 @@ can also **record** what other apps play into tagged MP3 files (see
 - Click a column header (Track, Title, Artist, Album, File) to sort: 1st click descending ▼, 2nd ascending ▲, 3rd back to load order.
 - **Number tracks** sets the Track of the selected files to `01`, `02`, … in table order.
 - **Rename files…** renames the selected files from their saved tags using a pattern such as `{track} - {artist} - {title}` (placeholders: `{track} {title} {artist} {album} {genre} {year}`). A preview shows the new names; files whose name would collide or be empty are skipped. Unsaved edits of the selection are saved first.
-- **Volume…** measures the loudness of the selected files (EBU R128 / ReplayGain 2.0) and normalizes them to −18 LUFS, either per **Track** or as one **Album** gain that keeps the levels between the files. The level is changed losslessly like MP3Gain does: only the `global_gain` field of every MP3 frame is adjusted (steps of 1.5 dB), the audio is not re-encoded. The gain is reduced where the file would otherwise clip. The remaining fine adjustment is stored as ReplayGain values, and **Undo volume changes** restores the original audio exactly. Unsaved edits of the selection are saved first.
+- **Volume…** measures the loudness of the selected files (EBU R128 / ReplayGain 2.0) and normalizes them to −18 LUFS, either per **Track** or as one **Album** gain that keeps the levels between the files. The level is changed losslessly like MP3Gain does: only the `global_gain` field of every MP3 frame is adjusted (steps of 1.5 dB), the audio is not re-encoded. The gain is reduced where the file would otherwise clip. The remaining fine adjustment is stored as ReplayGain values, and **Undo volume changes** restores the original audio exactly. The change is recorded the way MP3Gain records it (`MP3GAIN_UNDO` in an APEv2 tag), so `mp3gain -u` undoes a change made by go-tag, and go-tag shows and undoes changes made by MP3Gain. As in MP3Gain, silent granules (`global_gain` 0) are left unchanged. Unsaved edits of the selection are saved first.
 - Edits are kept in memory until **Save** (Ctrl/Cmd+S) writes all changed files at once; **Revert all** discards them.
 
 How a file is saved depends on the **Replace all tags** checkbox next to Save (on by default, remembered between runs; it also applies to Volume…):
 
-- **On:** the tag is rewritten as ID3v2.3 containing only the fields above plus the volume information (`REPLAYGAIN_*` and `GO-TAG_GAIN_STEPS` TXXX frames). All other frames (comments, lyrics, extra pictures, …) as well as ID3v1, Lyrics3 and APEv2 tags are removed.
-- **Off:** all existing tags are kept and only the fields above are written on top. Unchanged fields stay as they are, changed fields are replaced and cleared fields are removed. Comments, lyrics, other pictures, APEv2 and Lyrics3 tags are kept, and an ID3v1 tag is updated with the new values.
+- **On:** the tag is rewritten as ID3v2.3 containing only the fields above plus the ReplayGain values (`REPLAYGAIN_*` TXXX frames). All other frames (comments, lyrics, extra pictures, …) as well as ID3v1, Lyrics3 and APEv2 tags are removed; if the volume was changed, a small APEv2 tag holding only `MP3GAIN_UNDO` is written at the end of the file.
+- **Off:** all existing tags are kept and only the fields above are written on top. Unchanged fields stay as they are, changed fields are replaced and cleared fields are removed. Comments, lyrics, other pictures, APEv2 and Lyrics3 tags are kept, and an ID3v1 tag is updated with the new values. A volume change updates `MP3GAIN_UNDO` in the APEv2 tag and removes MP3Gain's cached values there (`MP3GAIN_MINMAX`, `MP3GAIN_ALBUM_MINMAX`, `REPLAYGAIN_*`), which no longer apply.
 
 The audio data is not touched in either mode.
 
@@ -132,6 +132,12 @@ be used without the app and its dependencies (Fyne, the recorder):
 go get github.com/mailsvb/go-tag/mp3tags@latest
 go get github.com/mailsvb/go-tag/mp3gain@latest
 ```
+
+Both modules are MIT-licensed (see `mp3tags/LICENSE` and `mp3gain/LICENSE`).
+`Gain.Steps` is stored in MP3Gain's format, so files stay compatible with
+`mp3gain -u` / `mp3gain -s c`. Note that `mp3gain -u` (without `-s i`) does not
+update the ReplayGain values in the ID3v2 tag; analyze the file again after
+undoing with MP3Gain.
 
 Normalizing one file to −18 LUFS and recording the change in the tag, so it can be undone later:
 

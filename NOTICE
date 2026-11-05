@@ -1,3 +1,10 @@
+The mp3tags and mp3gain modules (mp3tags/, mp3gain/) are licensed under the
+MIT License; see the LICENSE file in each directory. The K-weighting filter in
+mp3gain/loudness.go uses the formulas of libebur128 (MIT License,
+https://github.com/jiixyj/libebur128). The MP3GAIN_UNDO tag format follows
+MP3Gain (https://mp3gain.sourceforge.net) for interoperability; no MP3Gain code
+is included.
+
 go-tag uses the following third-party software:
 
 - Fyne (fyne.io/fyne/v2) — BSD 3-Clause License
