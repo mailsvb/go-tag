@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // Field identifies an editable tag field.
@@ -36,7 +36,7 @@ func (f Field) String() string {
 	return [...]string{"Title", "Artist", "Album", "Genre", "Year", "Track", "Cover"}[f]
 }
 
-func text(t *tags.Tags, f Field) *string {
+func text(t *mp3tags.Tags, f Field) *string {
 	switch f {
 	case Title:
 		return &t.Title
@@ -55,13 +55,13 @@ func text(t *tags.Tags, f Field) *string {
 }
 
 // Text returns the value of a text field.
-func Text(t tags.Tags, f Field) string { return *text(&t, f) }
+func Text(t mp3tags.Tags, f Field) string { return *text(&t, f) }
 
 // File is a loaded MP3 file with its tags as on disk (Original) and as edited (Current).
 type File struct {
 	Path     string
-	Original tags.Tags
-	Current  tags.Tags
+	Original mp3tags.Tags
+	Current  mp3tags.Tags
 	Thumb    image.Image // thumbnail of Current.Cover, nil without cover
 
 	origThumb image.Image
@@ -70,7 +70,7 @@ type File struct {
 
 // Load reads the tags of the file at path and prepares its thumbnail.
 func Load(path string) (*File, error) {
-	t, err := tags.Read(path)
+	t, err := mp3tags.Read(path)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (l *Library) Common(f Field) (value string, mixed bool) {
 }
 
 // CommonCover is Common for the cover.
-func (l *Library) CommonCover() (cover *tags.Picture, thumb image.Image, mixed bool) {
+func (l *Library) CommonCover() (cover *mp3tags.Picture, thumb image.Image, mixed bool) {
 	for i, file := range l.Selected() {
 		if i == 0 {
 			cover, thumb = file.Current.Cover, file.Thumb
@@ -260,7 +260,7 @@ func (l *Library) Apply(f Field, value string) {
 }
 
 // ApplyCover sets (or with nil removes) the cover of all selected files.
-func (l *Library) ApplyCover(cover *tags.Picture) {
+func (l *Library) ApplyCover(cover *mp3tags.Picture) {
 	thumb := Thumbnail(cover, ThumbSize)
 	for _, file := range l.Selected() {
 		file.Current.Cover = cover
@@ -302,13 +302,13 @@ func (l *Library) Pending() []*File {
 
 // CommitGain records that the volume information g was written to disk for f.
 // The gain is not an edit, so it is set in both the saved and the current tags.
-func (l *Library) CommitGain(f *File, g tags.Gain) {
+func (l *Library) CommitGain(f *File, g mp3tags.Gain) {
 	f.Original.Gain = g
 	f.Current.Gain = g
 }
 
 // MarkSaved records that saved was written to disk for f.
-func (l *Library) MarkSaved(f *File, saved tags.Tags) {
+func (l *Library) MarkSaved(f *File, saved mp3tags.Tags) {
 	f.Original = saved
 	if saved.Cover.Equal(f.Current.Cover) {
 		f.origThumb = f.Thumb

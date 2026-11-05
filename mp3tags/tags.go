@@ -1,11 +1,13 @@
-// Package tags reads and writes the MP3 tag fields go-tag edits.
+// Package mp3tags reads and writes a small, fixed set of MP3 tag fields.
 //
 // Only Title, Artist, Album Artist, Album, Genre, Year, Track, the front cover
-// and the volume information (ReplayGain values and the gain applied by
-// go-tag) are kept. Writing replaces every existing tag (all other ID3v2
-// frames, ID3v1, Lyrics3 and APEv2) with a fresh ID3v2.3 tag holding just
-// these fields.
-package tags
+// and the volume information (ReplayGain values and the lossless gain change
+// applied to the audio frames, see package
+// github.com/mailsvb/go-tag/mp3gain) are kept. Writing replaces every
+// existing tag (all other ID3v2 frames, ID3v1, Lyrics3 and APEv2) with a
+// fresh ID3v2.3 tag holding just these fields; the audio data is copied
+// unchanged unless WriteAudio is used.
+package mp3tags
 
 import (
 	"bytes"
@@ -50,8 +52,9 @@ type Tags struct {
 // Gain is the volume information of a file. It is not edited directly but
 // written by the volume adjustment.
 type Gain struct {
-	// Steps is the total global_gain change (1.5 dB each) go-tag applied to
-	// the audio frames; applying -Steps restores the original level.
+	// Steps is the total global_gain change (1.5 dB each) applied to the
+	// audio frames; applying -Steps restores the original level. It is
+	// stored in the TXXX frame "GO-TAG_GAIN_STEPS".
 	Steps int
 	// ReplayGain values as stored in the tag, e.g. "-0.42 dB" and "0.912345";
 	// empty if absent.

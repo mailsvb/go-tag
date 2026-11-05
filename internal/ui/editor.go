@@ -16,7 +16,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/mailsvb/go-tag/internal/library"
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 const (
@@ -54,7 +54,7 @@ type editor struct {
 	coverInfo    *widget.Label
 	coverChoose  *widget.Button
 	coverRemove  *widget.Button
-	coverValue   *tags.Picture
+	coverValue   *mp3tags.Picture
 	coverEdited  bool
 	loading      bool
 	content      fyne.CanvasObject
@@ -69,7 +69,7 @@ func newEditor(a *App) *editor {
 		r := &fieldRow{field: f}
 		switch f {
 		case library.Genre:
-			se := widget.NewSelectEntry(tags.SortedGenres())
+			se := widget.NewSelectEntry(mp3tags.SortedGenres())
 			r.entry, r.input = &se.Entry, se
 		default:
 			r.entry = widget.NewEntry()
@@ -243,7 +243,7 @@ func (e *editor) coverToggled(on bool) {
 }
 
 // setCover applies a new cover (nil removes it) to the selection.
-func (e *editor) setCover(p *tags.Picture) {
+func (e *editor) setCover(p *mp3tags.Picture) {
 	if !e.hasSelection || !e.coverToggle.Checked {
 		return
 	}
@@ -278,7 +278,7 @@ func (e *editor) setCoverFromFile(path string) {
 	e.setCover(p)
 }
 
-func loadPicture(path string) (*tags.Picture, error) {
+func loadPicture(path string) (*mp3tags.Picture, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -287,5 +287,5 @@ func loadPicture(path string) (*tags.Picture, error) {
 	if mime != "image/jpeg" && mime != "image/png" {
 		return nil, fmt.Errorf("%s is not a JPEG or PNG image", path)
 	}
-	return &tags.Picture{MIME: mime, Data: data}, nil
+	return &mp3tags.Picture{MIME: mime, Data: data}, nil
 }

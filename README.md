@@ -78,6 +78,10 @@ go run .
 go test ./...
 ```
 
+`mp3tags` and `mp3gain` are separate Go modules, so `go test ./...` in the
+repository root does not include them. `make test` vets and tests all three
+modules (or run `go test ./...` inside `mp3tags/` and `mp3gain/`).
+
 To try recording with Now Playing during development, build the adapter once
 with `make adapter` and run go-tag from the repository root (or point
 `GOTAG_MEDIAREMOTE_DIR` at `build/adapter`). `GOTAG_LIVE=1 go test -run Live
@@ -101,17 +105,60 @@ app and adds the microphone and automation texts macOS shows when asking for per
 | `main.go` | Application entry point, creates the window |
 | `internal/ui` | Fyne widgets: toolbar, file table, tag editor, native file dialogs |
 | `internal/library` | Loaded files, selection and pending edits (no UI) |
-| `internal/tags` | Reading and writing the MP3 tags |
-| `internal/gain` | Loudness analysis and lossless volume change of the MP3 frames |
+| `mp3tags/` | Reading and writing the MP3 tags (separate module, see [Libraries](#libraries)) |
+| `mp3gain/` | Loudness analysis and lossless volume change of the MP3 frames (separate module, see [Libraries](#libraries)) |
 | `internal/recorder` | Recording (macOS): capture engine, Now Playing, track splitting, MP3 writer, `session` controller |
 | `driver/` | Build of the Gocorder audio driver (BlackHole, GPL-3.0, installed separately) |
 | `third_party/mediaremote-adapter` | Now Playing helper bundled into the macOS app |
 | `Makefile`, `scripts/` | macOS adapter, app bundle and driver builds |
 | `FyneApp.toml`, `Icon.png` | Fyne app metadata and icon used by `fyne package` |
 
+## Libraries
+
+The tag and volume code is published as two Go modules of their own, so it can
+be used without the app and its dependencies (Fyne, the recorder):
+
+| Module | Dependencies | Purpose |
+| --- | --- | --- |
+| `github.com/mailsvb/go-tag/mp3tags` | `bogem/id3v2`, `x/text` | Read/write Title, Artist, Album Artist, Album, Genre, Year, Track, cover and ReplayGain/gain values; writing replaces all other tags with a clean ID3v2.3 tag |
+| `github.com/mailsvb/go-tag/mp3gain` | `hajimehoshi/go-mp3` | EBU R128 / ReplayGain 2.0 loudness analysis and lossless `global_gain` volume change (MP3Gain style) |
+
+```bash
+go get github.com/mailsvb/go-tag/mp3tags@latest
+go get github.com/mailsvb/go-tag/mp3gain@latest
+```
+
+Normalizing one file to −18 LUFS and recording the change in the tag, so it can be undone later:
+
+```go
+t, err := mp3tags.Read(path)
+if err != nil { /* ... */ }
+audio, err := mp3tags.ReadAudio(path)
+if err != nil { /* ... */ }
+res, err := mp3gain.Analyze(audio)
+if err != nil { /* ... */ }
+c := mp3gain.PlanTrack(res)
+t.Gain.Steps += c.Steps
+t.Gain.TrackGain, t.Gain.TrackPeak = c.ReplayGain()
+err = mp3tags.WriteAudio(path, t, func(a []byte) error { return mp3gain.Apply(a, c.Steps) })
+```
+
+The app uses the copies in this repository through the `replace` lines in the
+root `go.mod`; those lines have no effect on other modules that import the libraries.
+
+**Versioning:** the libraries are versioned independently of the app, with
+tags that start with the module directory:
+
+```bash
+git tag mp3tags/v0.1.0 && git push origin mp3tags/v0.1.0
+git tag mp3gain/v0.1.0 && git push origin mp3gain/v0.1.0
+```
+
+Until such a tag exists, `go get …@main` resolves to a pseudo-version.
+
 ## CI/CD
 
-- **Test** (`.github/workflows/test.yml`): runs `gofmt`, `go vet` and `go test -race` on Windows and macOS for every push to `main` (on macOS with ffmpeg installed, for the MP3 encoder test).
+- **Test** (`.github/workflows/test.yml`): runs `gofmt`, `go vet` and `go test -race` for the app and both library modules on Windows and macOS for every push to `main` (on macOS with ffmpeg installed, for the MP3 encoder test).
 - **Release** (`.github/workflows/release.yml`): start it manually under *Actions → Release → Run workflow* on `main`.
   - Enter a version `X.Y.Z` to release exactly that version, or
   - leave it empty to bump the patch number of the latest `vX.Y.Z` tag (the first release is `0.9.0`).

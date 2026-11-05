@@ -10,13 +10,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 func newLib(titles ...string) *Library {
 	l := &Library{}
 	for i, title := range titles {
-		t := tags.Tags{Title: title, Artist: "Artist", AlbumArtist: "Various", Year: "200" + string(rune('0'+i))}
+		t := mp3tags.Tags{Title: title, Artist: "Artist", AlbumArtist: "Various", Year: "200" + string(rune('0'+i))}
 		l.Add(&File{Path: title + ".mp3", Original: t, Current: t})
 	}
 	return l
@@ -107,7 +107,7 @@ func TestCoverAndMarkSaved(t *testing.T) {
 	if err := png.Encode(&buf, img); err != nil {
 		t.Fatal(err)
 	}
-	cover := &tags.Picture{MIME: "image/png", Data: buf.Bytes()}
+	cover := &mp3tags.Picture{MIME: "image/png", Data: buf.Bytes()}
 
 	l := newLib("a", "b")
 	l.SelectAll()

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 func rowTitles(l *Library) []string {
@@ -21,7 +21,7 @@ func rowTitles(l *Library) []string {
 func trackLib(tracks ...string) *Library {
 	l := &Library{}
 	for i, tr := range tracks {
-		t := tags.Tags{Title: string(rune('a' + i)), Track: tr}
+		t := mp3tags.Tags{Title: string(rune('a' + i)), Track: tr}
 		l.Add(&File{Path: t.Title + ".mp3", Original: t, Current: t})
 	}
 	return l
@@ -82,7 +82,7 @@ func TestSelectionFollowsDisplayOrder(t *testing.T) {
 }
 
 func TestRenderName(t *testing.T) {
-	tg := tags.Tags{Track: "01", Title: "What? Now: Yes/No", Artist: "  AC/DC ", Album: "Al", Genre: "Rock", Year: "1999"}
+	tg := mp3tags.Tags{Track: "01", Title: "What? Now: Yes/No", Artist: "  AC/DC ", Album: "Al", Genre: "Rock", Year: "1999"}
 	for pattern, want := range map[string]string{
 		"{track} - {artist} - {title}":   "01 - AC_DC - What_ Now_ Yes_No.mp3",
 		"{YEAR} {album} {genre} {other}": "1999 Al Rock {other}.mp3",
@@ -93,7 +93,7 @@ func TestRenderName(t *testing.T) {
 			t.Errorf("RenderName(%q) = %q, %v; want %q", pattern, got, err, want)
 		}
 	}
-	if _, err := RenderName("{title}", tags.Tags{}); err == nil {
+	if _, err := RenderName("{title}", mp3tags.Tags{}); err == nil {
 		t.Error("empty name accepted")
 	}
 }
@@ -105,7 +105,7 @@ func TestPlanAndApplyRenames(t *testing.T) {
 		if err := os.WriteFile(p, []byte(name), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		tg := tags.Tags{Title: title}
+		tg := mp3tags.Tags{Title: title}
 		return &File{Path: p, Original: tg, Current: tg}
 	}
 	files := []*File{

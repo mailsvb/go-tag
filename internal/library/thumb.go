@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/image/draw"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // ThumbSize is the edge length in pixels of cover thumbnails.
@@ -17,7 +17,7 @@ const ThumbSize = 96
 
 // Thumbnail decodes a cover and scales it to fit into size×size pixels.
 // It returns nil for a missing or undecodable cover.
-func Thumbnail(p *tags.Picture, size int) image.Image {
+func Thumbnail(p *mp3tags.Picture, size int) image.Image {
 	if p == nil || len(p.Data) == 0 {
 		return nil
 	}

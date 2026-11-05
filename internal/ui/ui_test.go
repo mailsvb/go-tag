@@ -13,7 +13,7 @@ import (
 	"fyne.io/fyne/v2/test"
 
 	"github.com/mailsvb/go-tag/internal/library"
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 type fakePicker struct {
@@ -35,7 +35,7 @@ func fixture(t *testing.T) (dir, cover string) {
 		if err := os.WriteFile(path, audio, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := tags.Write(path, tags.Tags{
+		err := mp3tags.Write(path, mp3tags.Tags{
 			Title: fmt.Sprintf("Song %d", i), Artist: "Old Artist", AlbumArtist: "Various",
 			Album: "Old Album", Year: "2001", Track: fmt.Sprint(i),
 		})
@@ -115,7 +115,7 @@ func TestEditAndSave(t *testing.T) {
 	}
 
 	for i, f := range a.lib.Files {
-		got, err := tags.Read(f.Path)
+		got, err := mp3tags.Read(f.Path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -215,7 +215,7 @@ func TestSortNumberAndRename(t *testing.T) {
 }
 
 func TestVolume(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "gain", "testdata", "stereo44k.mp3"))
+	src, err := os.ReadFile(filepath.Join("..", "..", "mp3gain", "testdata", "stereo44k.mp3"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,12 +265,12 @@ func TestVolume(t *testing.T) {
 		if g.Steps != 2 || g.TrackGain == "" || g.AlbumGain == "" || f.Dirty() {
 			t.Errorf("%s: gain %+v, dirty %v", f.Name(), g, f.Dirty())
 		}
-		onDisk, err := tags.Read(f.Path)
+		onDisk, err := mp3tags.Read(f.Path)
 		if err != nil || onDisk.Gain != g {
 			t.Errorf("%s: gain on disk %+v, %v, want %+v", f.Name(), onDisk.Gain, err, g)
 		}
 	}
-	if got, _ := tags.Read(a.lib.Files[0].Path); got.Title != "Edited" {
+	if got, _ := mp3tags.Read(a.lib.Files[0].Path); got.Title != "Edited" {
 		t.Errorf("title on disk = %q, want the saved edit", got.Title)
 	}
 
@@ -293,10 +293,10 @@ func TestVolume(t *testing.T) {
 	// Undo restores the original audio.
 	analyze().undoChanges()
 	for _, f := range a.lib.Files {
-		if f.Original.Gain != (tags.Gain{}) {
+		if f.Original.Gain != (mp3tags.Gain{}) {
 			t.Errorf("%s: gain after undo = %+v", f.Name(), f.Original.Gain)
 		}
-		audio, err := tags.ReadAudio(f.Path)
+		audio, err := mp3tags.ReadAudio(f.Path)
 		if err != nil || !bytes.Equal(audio, src) {
 			t.Errorf("%s: audio after undo differs from the original (%v)", f.Name(), err)
 		}

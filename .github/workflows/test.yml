@@ -40,8 +40,18 @@ jobs:
             exit 1
           fi
 
+      # The app and the libraries are separate modules; ./... stops at
+      # nested go.mod files, so each module is checked on its own.
       - name: Vet
-        run: go vet ./...
+        shell: bash
+        run: |
+          for m in . mp3tags mp3gain; do
+            (cd "$m" && go vet ./...) || exit 1
+          done
 
       - name: Test
-        run: go test -race ./...
+        shell: bash
+        run: |
+          for m in . mp3tags mp3gain; do
+            (cd "$m" && go test -race ./...) || exit 1
+          done

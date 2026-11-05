@@ -1,4 +1,4 @@
-package gain
+package mp3gain
 
 import "math"
 

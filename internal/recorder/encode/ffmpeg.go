@@ -12,7 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // ffmpegSink pipes raw f32le PCM into an ffmpeg subprocess that encodes an
@@ -67,7 +67,7 @@ func ffmpegArgs(part string, o Options) []string {
 	} else {
 		args = append(args, "-b:a", or(o.Bitrate, "320k"))
 	}
-	// No tags from ffmpeg: Close writes them with tags.Write.
+	// No tags from ffmpeg: Close writes them with mp3tags.Write.
 	return append(args, "-id3v2_version", "0", "-write_id3v1", "0", "-f", "mp3", "-y", part)
 }
 
@@ -132,7 +132,7 @@ func (s *ffmpegSink) Close() error {
 	if ferr != nil {
 		return ferr
 	}
-	terr := tags.Write(s.part, ToTags(s.meta, !s.opts.NoCover))
+	terr := mp3tags.Write(s.part, ToTags(s.meta, !s.opts.NoCover))
 	if err := moveInto(s.part, s.path); err != nil {
 		return err
 	}

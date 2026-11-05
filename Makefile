@@ -54,8 +54,11 @@ driver-install:
 driver-uninstall:
 	$(MAKE) -C driver uninstall
 
+# The app and the libraries (mp3tags, mp3gain) are separate modules.
+MODULES := . mp3tags mp3gain
+
 test:
-	go test -race ./...
+	for m in $(MODULES); do (cd $$m && go vet ./... && go test -race ./...) || exit 1; done
 
 clean:
 	rm -rf $(BUILD) go-tag.app

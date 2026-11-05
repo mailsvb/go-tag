@@ -6,7 +6,7 @@
 // 2^(global_gain/4). Changing that value by one step changes the level by
 // exactly 1.5 dB (the same technique MP3Gain uses). The Huffman coded audio
 // data is not touched, so a change can be undone exactly.
-package gain
+package mp3gain
 
 import (
 	"errors"

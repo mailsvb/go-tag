@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // DefaultRenamePattern is the rename pattern offered on first use.
@@ -29,7 +29,7 @@ var (
 var ErrUnchanged = errors.New("name unchanged")
 
 // RenderName builds a file name (with .mp3 extension) from pattern and t.
-func RenderName(pattern string, t tags.Tags) (string, error) {
+func RenderName(pattern string, t mp3tags.Tags) (string, error) {
 	name := placeholderRe.ReplaceAllStringFunc(pattern, func(m string) string {
 		switch strings.ToLower(m[1 : len(m)-1]) {
 		case "track":

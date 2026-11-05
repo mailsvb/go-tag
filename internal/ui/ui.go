@@ -16,7 +16,7 @@ import (
 
 	"github.com/mailsvb/go-tag/internal/library"
 	"github.com/mailsvb/go-tag/internal/recorder/session"
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // App is the main window content: toolbar, file table, tag editor and status
@@ -296,7 +296,7 @@ func (a *App) save(pending []*library.File, onDone func()) {
 	}
 	type job struct {
 		file *library.File
-		tags tags.Tags
+		tags mp3tags.Tags
 	}
 	jobs := make([]job, len(pending))
 	for i, f := range pending {
@@ -304,7 +304,7 @@ func (a *App) save(pending []*library.File, onDone func()) {
 	}
 
 	a.runWithProgress("Saving "+filesCount(len(jobs)), len(jobs),
-		func(i int) error { return tags.Write(jobs[i].file.Path, jobs[i].tags) },
+		func(i int) error { return mp3tags.Write(jobs[i].file.Path, jobs[i].tags) },
 		func(errs []error) {
 			var failed []string
 			for i, j := range jobs {

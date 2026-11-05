@@ -22,7 +22,7 @@ import (
 	"github.com/mailsvb/go-tag/internal/library"
 	"github.com/mailsvb/go-tag/internal/recorder/meter"
 	"github.com/mailsvb/go-tag/internal/recorder/session"
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // Choices of the settings selects, mapped to Settings values.
@@ -637,7 +637,7 @@ func (r *recordTab) updateText(s session.Snapshot, now time.Time) {
 	}
 	if !bytes.Equal(t.Artwork, r.coverData) {
 		r.coverData = t.Artwork
-		r.cover.Image = library.Thumbnail(&tags.Picture{Data: t.Artwork}, 2*library.ThumbSize)
+		r.cover.Image = library.Thumbnail(&mp3tags.Picture{Data: t.Artwork}, 2*library.ThumbSize)
 		r.cover.Refresh()
 	}
 

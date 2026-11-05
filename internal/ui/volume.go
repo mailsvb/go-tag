@@ -10,9 +10,9 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/mailsvb/go-tag/internal/gain"
 	"github.com/mailsvb/go-tag/internal/library"
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3gain"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 const (
@@ -35,9 +35,9 @@ func (a *App) adjustVolume() {
 // volumeItem is the analysis of one file and its planned change.
 type volumeItem struct {
 	file   *library.File
-	result gain.Result
+	result mp3gain.Result
 	err    error
-	change gain.Change
+	change mp3gain.Change
 }
 
 // analyzeVolume measures files in the background and passes the results to done.
@@ -48,9 +48,9 @@ func (a *App) analyzeVolume(sel []*library.File, done func([]volumeItem)) {
 	}
 	a.runWithProgress("Analyzing "+filesCount(len(items)), len(items),
 		func(i int) error {
-			audio, err := tags.ReadAudio(items[i].file.Path)
+			audio, err := mp3tags.ReadAudio(items[i].file.Path)
 			if err == nil {
-				items[i].result, err = gain.Analyze(audio)
+				items[i].result, err = mp3gain.Analyze(audio)
 			}
 			items[i].err = err
 			return nil
@@ -62,7 +62,7 @@ func (a *App) analyzeVolume(sel []*library.File, done func([]volumeItem)) {
 type volumeDialog struct {
 	app     *App
 	items   []volumeItem
-	album   gain.Change // the album change in album mode
+	album   mp3gain.Change // the album change in album mode
 	mode    *widget.RadioGroup
 	list    *widget.List
 	summary *widget.Label
@@ -90,7 +90,7 @@ func (a *App) newVolumeDialog(items []volumeItem) *volumeDialog {
 	d.mode.Required = true
 
 	hint := widget.NewLabel(fmt.Sprintf("Target loudness %.0f LUFS. The level is changed in steps of %.1f dB without re-encoding; "+
-		"the gain is reduced where the file would clip. The change can be undone.", gain.Target, gain.StepDB))
+		"the gain is reduced where the file would clip. The change can be undone.", mp3gain.Target, mp3gain.StepDB))
 	hint.Wrapping = fyne.TextWrapWord
 	hint.TextStyle.Italic = true
 	content := container.NewBorder(
@@ -120,13 +120,13 @@ func (d *volumeDialog) albumMode() bool { return d.mode.Selected == modeAlbum }
 
 // update plans the changes for the selected mode.
 func (d *volumeDialog) update() {
-	var ok []gain.Result
+	var ok []mp3gain.Result
 	for _, it := range d.items {
 		if it.err == nil {
 			ok = append(ok, it.result)
 		}
 	}
-	d.album = gain.PlanAlbum(ok)
+	d.album = mp3gain.PlanAlbum(ok)
 	changing, failed, undoable := 0, 0, 0
 	for i := range d.items {
 		it := &d.items[i]
@@ -140,7 +140,7 @@ func (d *volumeDialog) update() {
 		if d.albumMode() {
 			it.change = d.album
 		} else {
-			it.change = gain.PlanTrack(it.result)
+			it.change = mp3gain.PlanTrack(it.result)
 		}
 		if it.change.Steps != 0 {
 			changing++
@@ -161,7 +161,7 @@ func (d *volumeDialog) update() {
 }
 
 // levelText describes a measured level and its planned change.
-func levelText(c gain.Change) string {
+func levelText(c mp3gain.Change) string {
 	if math.IsInf(c.Loudness, -1) {
 		return "silent, unchanged"
 	}
@@ -181,7 +181,7 @@ func volumeLine(it volumeItem) string {
 	c.Loudness, c.Peak = it.result.Loudness, it.result.Peak
 	s := name + "   " + levelText(c)
 	if steps := it.file.Original.Gain.Steps; steps != 0 {
-		s += fmt.Sprintf("   [changed before by %+.1f dB]", float64(steps)*gain.StepDB)
+		s += fmt.Sprintf("   [changed before by %+.1f dB]", float64(steps)*mp3gain.StepDB)
 	}
 	return s
 }
@@ -197,7 +197,7 @@ func dbfs(peak float64) string {
 type volumeJob struct {
 	file  *library.File
 	steps int
-	gain  tags.Gain
+	gain  mp3tags.Gain
 }
 
 // applyChanges writes the planned changes and the ReplayGain values.
@@ -208,7 +208,7 @@ func (d *volumeDialog) applyChanges() {
 		if it.err != nil {
 			continue
 		}
-		g := tags.Gain{Steps: it.file.Original.Gain.Steps + it.change.Steps}
+		g := mp3tags.Gain{Steps: it.file.Original.Gain.Steps + it.change.Steps}
 		track := it.change
 		track.Loudness, track.Peak = it.result.Loudness, it.result.Peak
 		g.TrackGain, g.TrackPeak = track.ReplayGain()
@@ -227,7 +227,7 @@ func (d *volumeDialog) undoChanges() {
 	var jobs []volumeJob
 	for _, it := range d.items {
 		if steps := it.file.Original.Gain.Steps; steps != 0 {
-			jobs = append(jobs, volumeJob{it.file, -steps, tags.Gain{}})
+			jobs = append(jobs, volumeJob{it.file, -steps, mp3tags.Gain{}})
 		}
 	}
 	d.dlg.Hide()
@@ -244,9 +244,9 @@ func (a *App) writeVolume(title string, jobs []volumeJob) {
 			t := j.file.Original
 			t.Gain = j.gain
 			if j.steps == 0 {
-				return tags.Write(j.file.Path, t)
+				return mp3tags.Write(j.file.Path, t)
 			}
-			return tags.WriteAudio(j.file.Path, t, func(audio []byte) error { return gain.Apply(audio, j.steps) })
+			return mp3tags.WriteAudio(j.file.Path, t, func(audio []byte) error { return mp3gain.Apply(audio, j.steps) })
 		},
 		func(errs []error) {
 			var failed []string

@@ -12,7 +12,7 @@ import (
 	"github.com/hajimehoshi/go-mp3"
 
 	"github.com/mailsvb/go-tag/internal/recorder/testimg"
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 func sine(frames, rate int) []float32 {
@@ -79,7 +79,7 @@ func TestToTags(t *testing.T) {
 // mp3Seconds decodes an MP3 file and returns its duration.
 func mp3Seconds(t *testing.T, path string) float64 {
 	t.Helper()
-	audio, err := tags.ReadAudio(path)
+	audio, err := mp3tags.ReadAudio(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestFFmpegSinkTagsCoverRetarget(t *testing.T) {
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
 		}
-		got, err := tags.Read(final)
+		got, err := mp3tags.Read(final)
 		if err != nil {
 			t.Fatal(err)
 		}

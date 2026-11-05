@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mailsvb/go-tag/internal/tags"
+	"github.com/mailsvb/go-tag/mp3tags"
 )
 
 // TestLive records 5 s from the real Gocorder device. Run it with
@@ -38,7 +38,7 @@ func TestLive(t *testing.T) {
 		t.Fatalf("result = %+v, callbacks = %d", res, snap.Callbacks)
 	}
 	for _, p := range saved {
-		tg, err := tags.Read(p)
+		tg, err := mp3tags.Read(p)
 		if err != nil {
 			t.Error(err)
 		}
