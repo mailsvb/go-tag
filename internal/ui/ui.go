@@ -43,6 +43,9 @@ type App struct {
 	selectAllBtn, selectNoneBtn           *widget.Button
 	numberBtn, renameBtn, volumeBtn       *widget.Button
 	revertBtn, saveBtn                    *widget.Button
+	// overwriteCheck selects whether saving replaces all existing tags of a
+	// file (checked) or keeps them and writes only the edited fields.
+	overwriteCheck *widget.Check
 
 	record *recordTab
 	tabs   *container.AppTabs
@@ -77,6 +80,9 @@ func New(w fyne.Window, version string, picker Picker, rec session.Recorder) *Ap
 	a.revertBtn = widget.NewButtonWithIcon("Revert all", theme.ContentUndoIcon(), a.revertAll)
 	a.saveBtn = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), a.Save)
 	a.saveBtn.Importance = widget.HighImportance
+	prefs := fyne.CurrentApp().Preferences()
+	a.overwriteCheck = widget.NewCheck("Replace all tags", func(on bool) { prefs.SetBool(prefSaveOverwrite, on) })
+	a.overwriteCheck.SetChecked(prefs.BoolWithFallback(prefSaveOverwrite, true))
 
 	toolbar := container.NewHBox(
 		a.openFilesBtn, a.openFolderBtn, a.clearBtn,
@@ -85,7 +91,7 @@ func New(w fyne.Window, version string, picker Picker, rec session.Recorder) *Ap
 		widget.NewSeparator(),
 		a.numberBtn, a.renameBtn, a.volumeBtn,
 		layout.NewSpacer(),
-		a.revertBtn, a.saveBtn,
+		a.overwriteCheck, a.revertBtn, a.saveBtn,
 	)
 	split := container.NewHSplit(
 		container.NewStack(a.table, container.NewCenter(a.hint)),
@@ -286,6 +292,13 @@ func (a *App) LoadPaths(paths []string) {
 	})
 }
 
+// prefSaveOverwrite stores the state of the "Replace all tags" check.
+const prefSaveOverwrite = "save.overwrite"
+
+// writeOpts returns the mp3tags options selected in the UI. Call it on the UI
+// goroutine.
+func (a *App) writeOpts() mp3tags.Option { return mp3tags.Overwrite(a.overwriteCheck.Checked) }
+
 // Save writes all pending changes to disk.
 func (a *App) Save() { a.save(a.lib.Pending(), nil) }
 
@@ -302,9 +315,10 @@ func (a *App) save(pending []*library.File, onDone func()) {
 	for i, f := range pending {
 		jobs[i] = job{f, f.Current}
 	}
+	opt := a.writeOpts()
 
 	a.runWithProgress("Saving "+filesCount(len(jobs)), len(jobs),
-		func(i int) error { return mp3tags.Write(jobs[i].file.Path, jobs[i].tags) },
+		func(i int) error { return mp3tags.Write(jobs[i].file.Path, jobs[i].tags, opt) },
 		func(errs []error) {
 			var failed []string
 			for i, j := range jobs {
@@ -482,6 +496,7 @@ func (a *App) refresh() {
 	}
 	setEnabled(a.saveBtn, !a.busy && pending > 0)
 	setEnabled(a.revertBtn, !a.busy && pending > 0)
+	setEnabled(a.overwriteCheck, !a.busy)
 	setEnabled(a.openFilesBtn, !a.busy)
 	setEnabled(a.openFolderBtn, !a.busy)
 	setEnabled(a.clearBtn, !a.busy && n > 0)

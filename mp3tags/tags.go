@@ -1,11 +1,14 @@
 // Package mp3tags reads and writes a small, fixed set of MP3 tag fields.
 //
-// Only Title, Artist, Album Artist, Album, Genre, Year, Track, the front cover
-// and the volume information (ReplayGain values and the lossless gain change
-// applied to the audio frames, see package
-// github.com/mailsvb/go-tag/mp3gain) are kept. Writing replaces every
-// existing tag (all other ID3v2 frames, ID3v1, Lyrics3 and APEv2) with a
-// fresh ID3v2.3 tag holding just these fields; the audio data is copied
+// The managed fields are Title, Artist, Album Artist, Album, Genre, Year,
+// Track, the front cover and the volume information (ReplayGain values and the
+// lossless gain change applied to the audio frames, see package
+// github.com/mailsvb/go-tag/mp3gain).
+//
+// By default writing replaces every existing tag (all other ID3v2 frames,
+// ID3v1, Lyrics3 and APEv2) with a fresh ID3v2.3 tag holding just these
+// fields. With Overwrite(false) all existing tags are kept and only the
+// managed fields are written on top of them. The audio data is copied
 // unchanged unless WriteAudio is used.
 package mp3tags
 
@@ -197,15 +200,34 @@ func isDigits(s string) bool {
 	return s != ""
 }
 
-// Write replaces all tags of the MP3 file at path with t. The audio data is
-// kept byte for byte; the file is rewritten via a temporary file and renamed
-// into place, so the original stays untouched if anything fails.
-func Write(path string, t Tags) error { return rewrite(path, t, nil) }
+// Option changes how Write and WriteAudio treat the existing tags.
+type Option func(*options)
+
+type options struct {
+	overwrite bool
+}
+
+// Overwrite selects the write mode. true (the default) replaces all existing
+// tags with a fresh tag holding just the managed fields. false keeps all
+// existing tags and writes only the managed fields on top of them: frames
+// whose value is unchanged stay as they are, changed fields are replaced and
+// empty fields are removed. Every other ID3v2 frame and the trailing APEv2,
+// Lyrics3 and ID3v1 tags are kept; the fields of an ID3v1 tag are updated
+// too. Only the first ID3v2 tag at the start of the file is kept.
+func Overwrite(on bool) Option {
+	return func(o *options) { o.overwrite = on }
+}
+
+// Write writes t to the MP3 file at path; see Overwrite for how existing tags
+// are treated. The audio data is kept byte for byte; the file is rewritten via
+// a temporary file and renamed into place, so the original stays untouched if
+// anything fails.
+func Write(path string, t Tags, opts ...Option) error { return rewrite(path, t, nil, opts) }
 
 // WriteAudio is Write, but the audio data is passed through transform first.
 // transform modifies the audio in place and must keep its length.
-func WriteAudio(path string, t Tags, transform func(audio []byte) error) error {
-	return rewrite(path, t, transform)
+func WriteAudio(path string, t Tags, transform func(audio []byte) error, opts ...Option) error {
+	return rewrite(path, t, transform, opts)
 }
 
 // ReadAudio returns the audio data of the MP3 file at path, without tags.
@@ -230,10 +252,10 @@ func ReadAudio(path string) ([]byte, error) {
 	return audio, nil
 }
 
-func rewrite(path string, t Tags, transform func(audio []byte) error) (err error) {
-	var tagBuf bytes.Buffer
-	if _, err := build(t).WriteTo(&tagBuf); err != nil {
-		return fmt.Errorf("encode tag: %w", err)
+func rewrite(path string, t Tags, transform func(audio []byte) error, opts []Option) (err error) {
+	o := options{overwrite: true}
+	for _, opt := range opts {
+		opt(&o)
 	}
 
 	src, err := os.Open(path)
@@ -249,6 +271,27 @@ func rewrite(path string, t Tags, transform func(audio []byte) error) (err error
 	if err != nil {
 		return err
 	}
+
+	tag := build(t)
+	var trailer []byte // tags after the audio data, kept in delta mode
+	if !o.overwrite {
+		if tag, err = existingTag(src, start); err != nil {
+			return err
+		}
+		merge(tag, t)
+		trailer = make([]byte, fi.Size()-end)
+		if _, err := src.ReadAt(trailer, end); err != nil {
+			return err
+		}
+		if n := len(trailer); n >= id3v1Size && string(trailer[n-id3v1Size:n-id3v1Size+3]) == "TAG" {
+			updateID3v1(trailer[n-id3v1Size:], t)
+		}
+	}
+	var tagBuf bytes.Buffer
+	if _, err := tag.WriteTo(&tagBuf); err != nil {
+		return fmt.Errorf("encode tag: %w", err)
+	}
+
 	var audio io.Reader = io.NewSectionReader(src, start, end-start)
 	if transform != nil {
 		b := make([]byte, end-start)
@@ -280,6 +323,9 @@ func rewrite(path string, t Tags, transform func(audio []byte) error) (err error
 	if _, err = io.Copy(tmp, audio); err != nil {
 		return err
 	}
+	if _, err = tmp.Write(trailer); err != nil {
+		return err
+	}
 	if err = tmp.Sync(); err != nil {
 		return err
 	}
@@ -291,44 +337,141 @@ func rewrite(path string, t Tags, transform func(audio []byte) error) (err error
 	return os.Rename(tmp.Name(), path)
 }
 
-// build creates an ID3v2.3 tag (UTF-16 text) holding exactly the fields of t.
-func build(t Tags) *id3v2.Tag {
+// newTag returns an empty ID3v2.3 tag with UTF-16 text.
+func newTag() *id3v2.Tag {
 	tag := id3v2.NewEmptyTag()
 	tag.SetVersion(3)
 	tag.SetDefaultEncoding(id3v2.EncodingUTF16)
-	add := func(id, value string) {
-		if value = strings.TrimSpace(value); value != "" {
-			tag.AddTextFrame(id, tag.DefaultEncoding(), value)
-		}
+	return tag
+}
+
+// build creates an ID3v2.3 tag (UTF-16 text) holding exactly the fields of t.
+func build(t Tags) *id3v2.Tag {
+	tag := newTag()
+	addText(tag, "TIT2", t.Title)
+	addText(tag, "TPE1", t.Artist)
+	addText(tag, "TPE2", t.AlbumArtist)
+	addText(tag, "TALB", t.Album)
+	addText(tag, "TCON", t.Genre)
+	addText(tag, tag.CommonID("Year"), t.Year)
+	addText(tag, "TRCK", t.Track)
+	addGain(tag, t.Gain)
+	addCover(tag, t.Cover)
+	return tag
+}
+
+// existingTag parses the first ID3v2 tag in r[0:size]. A missing or
+// unsupported (ID3v2.2) tag yields a new empty tag.
+func existingTag(r io.ReaderAt, size int64) (*id3v2.Tag, error) {
+	if size == 0 {
+		return newTag(), nil
 	}
-	add("TIT2", t.Title)
-	add("TPE1", t.Artist)
-	add("TPE2", t.AlbumArtist)
-	add("TALB", t.Album)
-	add("TCON", t.Genre)
-	add("TYER", t.Year)
-	add("TRCK", t.Track)
-	addTXXX := func(desc, value string) {
+	tag, err := id3v2.ParseReader(io.NewSectionReader(r, 0, size), id3v2.Options{Parse: true})
+	switch {
+	case errors.Is(err, id3v2.ErrUnsupportedVersion):
+		return newTag(), nil
+	case err != nil:
+		return nil, fmt.Errorf("parse ID3v2 tag: %w", err)
+	}
+	if tag.Version() == 4 {
+		tag.SetDefaultEncoding(id3v2.EncodingUTF8)
+	} else {
+		tag.SetDefaultEncoding(id3v2.EncodingUTF16)
+	}
+	return tag, nil
+}
+
+// merge writes the fields of t into tag, keeping all other frames. Frames of
+// fields whose value is unchanged are left as they are; empty fields are
+// removed.
+func merge(tag *id3v2.Tag, t Tags) {
+	cur := fromID3v2(tag)
+	setText := func(value, old string, ids ...string) {
+		if strings.TrimSpace(value) == old {
+			return
+		}
+		for _, id := range ids {
+			tag.DeleteFrames(id)
+		}
+		addText(tag, ids[0], value)
+	}
+	setText(t.Title, cur.Title, "TIT2")
+	setText(t.Artist, cur.Artist, "TPE1")
+	setText(t.AlbumArtist, cur.AlbumArtist, "TPE2")
+	setText(t.Album, cur.Album, "TALB")
+	setText(t.Genre, cur.Genre, "TCON")
+	setText(t.Year, cur.Year, tag.CommonID("Year"), "TYER", "TDRC")
+	setText(t.Track, cur.Track, "TRCK")
+
+	if t.Gain != cur.Gain {
+		frames := tag.GetFrames("TXXX")
+		tag.DeleteFrames("TXXX")
+		for _, fr := range frames {
+			if uf, ok := fr.(id3v2.UserDefinedTextFrame); ok && isGainTXXX(uf.Description) {
+				continue
+			}
+			tag.AddFrame("TXXX", fr)
+		}
+		addGain(tag, t.Gain)
+	}
+
+	if !t.Cover.Equal(cur.Cover) {
+		frames := tag.GetFrames("APIC")
+		tag.DeleteFrames("APIC")
+		for _, fr := range frames {
+			// Drop the front covers and the picture Read returned as the
+			// cover; other pictures (back cover, artist …) are kept.
+			if pf, ok := fr.(id3v2.PictureFrame); ok && (pf.PictureType == id3v2.PTFrontCover ||
+				cur.Cover != nil && bytes.Equal(pf.Picture, cur.Cover.Data)) {
+				continue
+			}
+			tag.AddFrame("APIC", fr)
+		}
+		addCover(tag, t.Cover)
+	}
+}
+
+func isGainTXXX(desc string) bool {
+	switch strings.ToUpper(cleanText(desc)) {
+	case txxxSteps, txxxTrackGain, txxxTrackPeak, txxxAlbumGain, txxxAlbumPeak:
+		return true
+	}
+	return false
+}
+
+// addText adds a text frame in the tag's default encoding unless value is empty.
+func addText(tag *id3v2.Tag, id, value string) {
+	if value = strings.TrimSpace(value); value != "" {
+		tag.AddTextFrame(id, tag.DefaultEncoding(), value)
+	}
+}
+
+// addGain adds the TXXX frames of the non-empty values of g.
+func addGain(tag *id3v2.Tag, g Gain) {
+	add := func(desc, value string) {
 		if value = strings.TrimSpace(value); value != "" {
 			tag.AddUserDefinedTextFrame(id3v2.UserDefinedTextFrame{
 				Encoding: id3v2.EncodingISO, Description: desc, Value: value,
 			})
 		}
 	}
-	if t.Gain.Steps != 0 {
-		addTXXX(txxxSteps, strconv.Itoa(t.Gain.Steps))
+	if g.Steps != 0 {
+		add(txxxSteps, strconv.Itoa(g.Steps))
 	}
-	addTXXX(txxxTrackGain, t.Gain.TrackGain)
-	addTXXX(txxxTrackPeak, t.Gain.TrackPeak)
-	addTXXX(txxxAlbumGain, t.Gain.AlbumGain)
-	addTXXX(txxxAlbumPeak, t.Gain.AlbumPeak)
-	if t.Cover != nil && len(t.Cover.Data) > 0 {
+	add(txxxTrackGain, g.TrackGain)
+	add(txxxTrackPeak, g.TrackPeak)
+	add(txxxAlbumGain, g.AlbumGain)
+	add(txxxAlbumPeak, g.AlbumPeak)
+}
+
+// addCover adds c as the front cover unless it is empty.
+func addCover(tag *id3v2.Tag, c *Picture) {
+	if c != nil && len(c.Data) > 0 {
 		tag.AddAttachedPicture(id3v2.PictureFrame{
 			Encoding:    id3v2.EncodingISO,
-			MimeType:    t.Cover.MIME,
+			MimeType:    c.MIME,
 			PictureType: id3v2.PTFrontCover,
-			Picture:     t.Cover.Data,
+			Picture:     c.Data,
 		})
 	}
-	return tag
 }

@@ -126,6 +126,48 @@ func readID3v1(r io.ReaderAt, size int64) (Tags, bool) {
 	return t, true
 }
 
+// updateID3v1 writes the fields of t into the ID3v1 tag b (128 bytes starting
+// with "TAG"). The comment is kept; a track number turns it into ID3v1.1.
+func updateID3v1(b []byte, t Tags) {
+	putLatin1(b[3:33], t.Title)
+	putLatin1(b[33:63], t.Artist)
+	putLatin1(b[63:93], t.Album)
+	putLatin1(b[93:97], t.Year)
+	track := strings.TrimSpace(t.Track)
+	if i := strings.IndexFunc(track, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+		track = track[:i]
+	}
+	if n, err := strconv.Atoi(track); err == nil && n > 0 && n < 256 {
+		b[125], b[126] = 0, byte(n)
+	} else if b[125] == 0 {
+		b[126] = 0
+	}
+	b[127] = 255
+	for i, g := range Genres {
+		if strings.EqualFold(g, strings.TrimSpace(t.Genre)) {
+			b[127] = byte(i)
+			break
+		}
+	}
+}
+
+// putLatin1 stores s in dst as ISO 8859-1, truncated and padded with NULs.
+// Characters outside ISO 8859-1 become '?'.
+func putLatin1(dst []byte, s string) {
+	clear(dst)
+	i := 0
+	for _, r := range strings.TrimSpace(s) {
+		if i == len(dst) {
+			break
+		}
+		if r > 0xFF {
+			r = '?'
+		}
+		dst[i] = byte(r)
+		i++
+	}
+}
+
 func latin1(b []byte) string {
 	if i := bytes.IndexByte(b, 0); i >= 0 {
 		b = b[:i]

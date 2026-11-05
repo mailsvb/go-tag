@@ -19,7 +19,12 @@ can also **record** what other apps play into tagged MP3 files (see
 - **Volume…** measures the loudness of the selected files (EBU R128 / ReplayGain 2.0) and normalizes them to −18 LUFS, either per **Track** or as one **Album** gain that keeps the levels between the files. The level is changed losslessly like MP3Gain does: only the `global_gain` field of every MP3 frame is adjusted (steps of 1.5 dB), the audio is not re-encoded. The gain is reduced where the file would otherwise clip. The remaining fine adjustment is stored as ReplayGain values, and **Undo volume changes** restores the original audio exactly. Unsaved edits of the selection are saved first.
 - Edits are kept in memory until **Save** (Ctrl/Cmd+S) writes all changed files at once; **Revert all** discards them.
 
-When a file is saved, its tag is rewritten as ID3v2.3 containing only the fields above plus the volume information (`REPLAYGAIN_*` and `GO-TAG_GAIN_STEPS` TXXX frames). All other frames (comments, lyrics, extra pictures, …) as well as ID3v1, Lyrics3 and APEv2 tags are removed; the audio data is not touched.
+How a file is saved depends on the **Replace all tags** checkbox next to Save (on by default, remembered between runs; it also applies to Volume…):
+
+- **On:** the tag is rewritten as ID3v2.3 containing only the fields above plus the volume information (`REPLAYGAIN_*` and `GO-TAG_GAIN_STEPS` TXXX frames). All other frames (comments, lyrics, extra pictures, …) as well as ID3v1, Lyrics3 and APEv2 tags are removed.
+- **Off:** all existing tags are kept and only the fields above are written on top. Unchanged fields stay as they are, changed fields are replaced and cleared fields are removed. Comments, lyrics, other pictures, APEv2 and Lyrics3 tags are kept, and an ID3v1 tag is updated with the new values.
+
+The audio data is not touched in either mode.
 
 ## Recording (macOS)
 
@@ -120,7 +125,7 @@ be used without the app and its dependencies (Fyne, the recorder):
 
 | Module | Dependencies | Purpose |
 | --- | --- | --- |
-| `github.com/mailsvb/go-tag/mp3tags` | `bogem/id3v2`, `x/text` | Read/write Title, Artist, Album Artist, Album, Genre, Year, Track, cover and ReplayGain/gain values; writing replaces all other tags with a clean ID3v2.3 tag |
+| `github.com/mailsvb/go-tag/mp3tags` | `bogem/id3v2`, `x/text` | Read/write Title, Artist, Album Artist, Album, Genre, Year, Track, cover and ReplayGain/gain values; writing replaces all other tags with a clean ID3v2.3 tag, or with `mp3tags.Overwrite(false)` keeps them and writes only these fields on top |
 | `github.com/mailsvb/go-tag/mp3gain` | `hajimehoshi/go-mp3` | EBU R128 / ReplayGain 2.0 loudness analysis and lossless `global_gain` volume change (MP3Gain style) |
 
 ```bash

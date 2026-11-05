@@ -302,3 +302,57 @@ func TestVolume(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveKeepsExistingTags(t *testing.T) {
+	dir, _ := fixture(t)
+	path := filepath.Join(dir, "01.mp3")
+	v1 := make([]byte, 128)
+	copy(v1, "TAG")
+	copy(v1[97:], "keep me")
+	v1[127] = 255
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(v1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	a := newTestApp(t, fakePicker{folder: dir})
+	test.Tap(a.openFolderBtn)
+	if !a.overwriteCheck.Checked {
+		t.Fatal("Replace all tags is off by default")
+	}
+	tail := func() []byte {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data[len(data)-128:]
+	}
+	saveAlbum := func(album string) {
+		t.Helper()
+		a.rowClicked(0, 0)
+		a.editor.row(library.Album).entry.SetText(album)
+		test.Tap(a.saveBtn)
+		if got, err := mp3tags.Read(path); err != nil || got.Album != album {
+			t.Fatalf("album on disk = %q, %v, want %q", got.Album, err, album)
+		}
+	}
+
+	test.Tap(a.overwriteCheck)
+	if fyne.CurrentApp().Preferences().Bool(prefSaveOverwrite) {
+		t.Error("unchecking was not stored in the preferences")
+	}
+	saveAlbum("Delta")
+	if b := tail(); string(b[:3]) != "TAG" || !bytes.HasPrefix(b[97:], []byte("keep me")) || !bytes.HasPrefix(b[63:], []byte("Delta")) {
+		t.Errorf("ID3v1 tag after delta save = %q", b)
+	}
+
+	test.Tap(a.overwriteCheck)
+	saveAlbum("Overwrite")
+	if b := tail(); string(b[:3]) == "TAG" {
+		t.Error("ID3v1 tag kept although Replace all tags is on")
+	}
+}

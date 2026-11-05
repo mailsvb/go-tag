@@ -286,3 +286,176 @@ func TestWriteAudio(t *testing.T) {
 		t.Error("failed WriteAudio modified the file")
 	}
 }
+
+// frameIDs returns the number of frames per ID of the ID3v2 tag of the file.
+func frameIDs(t *testing.T, path string) (*id3v2.Tag, map[string]int) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	tag, err := id3v2.ParseReader(f, id3v2.Options{Parse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int{}
+	for id, frames := range tag.AllFrames() {
+		ids[id] = len(frames)
+	}
+	return tag, ids
+}
+
+func TestWriteOverwriteExplicit(t *testing.T) {
+	path := writeFile(t, id3v24Tag(t), fakeAudio(), id3v1Tag("V1", "V1", 1, 1))
+	if err := Write(path, Tags{Title: "T"}, Overwrite(true)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ids := frameIDs(t, path); fmt.Sprint(ids) != fmt.Sprint(map[string]int{"TIT2": 1}) {
+		t.Errorf("frames = %v, want only TIT2", ids)
+	}
+}
+
+func TestWriteDeltaKeepsOtherTags(t *testing.T) {
+	audio := fakeAudio()
+	ape := apeTag()
+	path := writeFile(t, id3v24Tag(t), audio, ape, id3v1Tag("V1 Title", "V1 Artist", 5, 8))
+
+	want, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Title = "Neuer Titel"
+	want.Cover = &Picture{MIME: "image/png", Data: []byte("new cover")}
+	want.Gain = Gain{Steps: 2, TrackGain: "-1.00 dB"}
+	if err := Write(path, want, Overwrite(false)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(want) {
+		t.Errorf("Read after Write = %+v, want %+v", got, want)
+	}
+
+	tag, ids := frameIDs(t, path)
+	if v := tag.Version(); v != 4 {
+		t.Errorf("version = %d, want 4", v)
+	}
+	wantIDs := map[string]int{"TIT2": 1, "TPE1": 1, "TPE2": 1, "TALB": 1, "TCON": 1, "TDRC": 1, "TRCK": 1,
+		"COMM": 1, "TXXX": 3, "APIC": 2}
+	if fmt.Sprint(ids) != fmt.Sprint(wantIDs) {
+		t.Errorf("frames = %v, want %v", ids, wantIDs)
+	}
+	if s := tag.GetTextFrame("TDRC").Text; s != "2020-05-01" {
+		t.Errorf("TDRC = %q, want unchanged 2020-05-01", s)
+	}
+	if s := tag.GetTextFrame("TCON").Text; s != "(17)" {
+		t.Errorf("TCON = %q, want unchanged (17)", s)
+	}
+	var back, x bool
+	for _, fr := range tag.GetFrames("APIC") {
+		if pf := fr.(id3v2.PictureFrame); pf.PictureType == id3v2.PTBackCover && string(pf.Picture) == "back" {
+			back = true
+		}
+	}
+	for _, fr := range tag.GetFrames("TXXX") {
+		if uf := fr.(id3v2.UserDefinedTextFrame); uf.Description == "X" && uf.Value == "y" {
+			x = true
+		}
+	}
+	if !back || !x {
+		t.Errorf("back cover kept = %v, TXXX X kept = %v", back, x)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, err := skipID3v2(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rest := data[start:]
+	if !bytes.HasPrefix(rest, audio) {
+		t.Fatal("audio data changed")
+	}
+	rest = rest[len(audio):]
+	if !bytes.HasPrefix(rest, ape) {
+		t.Error("APEv2 tag not kept")
+	}
+	v1, ok := readID3v1(bytes.NewReader(data), int64(len(data)))
+	if !ok || v1.Title != "Neuer Titel" || v1.Artist != "Artist" || v1.Track != "3" || v1.Genre != "Rock" || v1.Year != "2020" {
+		t.Errorf("ID3v1 = %+v, %v; want updated fields", v1, ok)
+	}
+}
+
+func TestWriteDeltaEmptyRemovesField(t *testing.T) {
+	path := writeFile(t, id3v24Tag(t), fakeAudio(), id3v1Tag("V1 Title", "V1 Artist", 5, 8))
+	want, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Title = ""
+	want.Cover = nil
+	if err := Write(path, want, Overwrite(false)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The back cover is kept, and Read falls back to it as the cover.
+	want.Cover = &Picture{MIME: "image/png", Data: []byte("back")}
+	if !got.Equal(want) {
+		t.Errorf("Read after Write = %+v, want %+v", got, want)
+	}
+	tag, ids := frameIDs(t, path)
+	if ids["TIT2"] != 0 || ids["COMM"] != 1 {
+		t.Errorf("frames = %v, want no TIT2 and the COMM kept", ids)
+	}
+	for _, fr := range tag.GetFrames("APIC") {
+		if pf := fr.(id3v2.PictureFrame); pf.PictureType != id3v2.PTBackCover {
+			t.Errorf("picture type %d left after removing the cover", pf.PictureType)
+		}
+	}
+}
+
+func TestWriteDeltaNoExistingTag(t *testing.T) {
+	audio := fakeAudio()
+	want := Tags{Title: "T", Year: "2024", Gain: Gain{Steps: 1}}
+	overwrite := writeFile(t, audio)
+	delta := writeFile(t, audio)
+	if err := Write(overwrite, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(delta, want, Overwrite(false)); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := os.ReadFile(overwrite)
+	b, _ := os.ReadFile(delta)
+	if !bytes.Equal(a, b) {
+		t.Error("delta write of an untagged file differs from overwrite")
+	}
+}
+
+func TestWriteAudioDelta(t *testing.T) {
+	path := writeFile(t, id3v24Tag(t), fakeAudio())
+	want, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Gain.Steps = -1
+	err = WriteAudio(path, want, func(b []byte) error { b[10] ^= 0xFF; return nil }, Overwrite(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Read(path); err != nil || !got.Equal(want) {
+		t.Errorf("Read = %+v, %v, want %+v", got, err, want)
+	}
+	if _, ids := frameIDs(t, path); ids["COMM"] != 1 || ids["TXXX"] != 2 {
+		t.Errorf("frames = %v, want COMM and both TXXX kept", ids)
+	}
+}

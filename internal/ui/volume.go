@@ -238,15 +238,16 @@ func (a *App) writeVolume(title string, jobs []volumeJob) {
 	if len(jobs) == 0 {
 		return
 	}
+	opt := a.writeOpts()
 	a.runWithProgress(title+" "+filesCount(len(jobs)), len(jobs),
 		func(i int) error {
 			j := jobs[i]
 			t := j.file.Original
 			t.Gain = j.gain
 			if j.steps == 0 {
-				return mp3tags.Write(j.file.Path, t)
+				return mp3tags.Write(j.file.Path, t, opt)
 			}
-			return mp3tags.WriteAudio(j.file.Path, t, func(audio []byte) error { return mp3gain.Apply(audio, j.steps) })
+			return mp3tags.WriteAudio(j.file.Path, t, func(audio []byte) error { return mp3gain.Apply(audio, j.steps) }, opt)
 		},
 		func(errs []error) {
 			var failed []string
