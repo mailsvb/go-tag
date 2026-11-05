@@ -176,8 +176,8 @@ root `go.mod`; those lines have no effect on other modules that import the libra
 tags that start with the module directory:
 
 ```bash
-git tag mp3tags/v0.1.0 && git push origin mp3tags/v0.1.0
-git tag mp3gain/v0.1.0 && git push origin mp3gain/v0.1.0
+git tag mp3tags/v0.1.1 && git push origin mp3tags/v0.1.1
+git tag mp3gain/v0.1.1 && git push origin mp3gain/v0.1.1
 ```
 
 Until such a tag exists, `go get …@main` resolves to a pseudo-version.

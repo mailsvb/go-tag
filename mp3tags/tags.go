@@ -396,6 +396,8 @@ func writeTo(w io.Writer, src io.ReaderAt, size int64, t Tags, transform func(au
 			updateID3v1(trailer[n-id3v1Size:], t)
 		}
 	}
+	// bogem/id3v2 writes UTF-16 text one byte too long; see fixUTF16.
+	fixUTF16(tag)
 	var tagBuf bytes.Buffer
 	if _, err := tag.WriteTo(&tagBuf); err != nil {
 		return fmt.Errorf("encode tag: %w", err)
