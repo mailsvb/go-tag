@@ -37,7 +37,8 @@ func apeTag() []byte {
 	value := "APE Title"
 	binary.Write(&items, binary.LittleEndian, uint32(len(value)))
 	binary.Write(&items, binary.LittleEndian, uint32(0))
-	items.WriteString("Title\x00" + value)
+	items.WriteString("Title\x00")
+	items.WriteString(value)
 
 	block := func(flags uint32) []byte {
 		var b bytes.Buffer
